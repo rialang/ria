@@ -1,0 +1,387 @@
+/**
+ * Standard input/output functions.
+ *
+ * Exceptions:
+ *  java.io.IOException - Can be thrown for IO errors by any function in this module.
+ */
+module ria.lang.io;
+
+import java.io: File, FileInputStream, FileOutputStream,
+                Reader, InputStream, InputStreamReader, BufferedReader,
+                OutputStream, OutputStreamWriter, BufferedWriter;
+import java.net.HttpURLConnection;
+import java.lang.Thread;
+
+var stdin' = None ();
+
+typedef input_handle = {
+    read is number -> string,
+    readln is () -> string,
+    contents is () -> string,
+    lines is () -> list<string>,
+    close is () -> (),
+    rawClose is () -> ()
+};
+
+typedef output_handle = {
+    close is () -> (),
+    flush is () -> (),
+    write is string -> (),
+    writeln is string -> ()
+};
+
+let readerHandle reader is ~BufferedReader -> `a = (
+    var l = []; // used for forcing on close
+    var used = false;
+    {
+        read num = Core::read(reader, num),
+
+        readln () =
+            latch reader do:
+                if used then
+                    Core::UNDEF_STR
+                else
+                    reader::readLine()
+                end
+            done,
+
+        contents () =
+            latch reader do:
+                if used then
+                    Core::UNDEF_STR
+                else
+                    used := true;
+                    try
+                        Core::readAll(reader)
+                    finally
+                        reader::close()
+                    end
+                end
+            done,
+
+        lines () =
+            latch reader do:
+                if used then
+                    []
+                else
+                    used := true;
+                    l := (ReaderList::lines(reader) cast list<string>);
+                    l
+                end
+            done,
+
+        close () =
+            try
+                latch reader do:
+                    if used then
+                        _ = length l
+                    end;
+                    used := true
+                done
+            finally
+                reader::close()
+            end,
+
+        rawClose () =
+            latch reader do:
+                used := true;
+                reader::close()
+            done
+    });
+
+let stdin () =
+    case stdin' of
+    Some rh: rh;
+    None _:
+       (rh = readerHandle new SafeBufferedReader(
+           new InputStreamReader(System::in));
+        stdin' := Some rh;
+        rh);
+    end;
+
+let withHandle h block = (
+    try
+        block h
+    finally
+        h.close ()
+    end
+);
+
+let inputHandle stream encoding is ~InputStream -> string -> `a = (
+    var nok = true;
+    try
+        r = new SafeBufferedReader(
+                    if encoding == "" then
+                        new InputStreamReader(stream)
+                    else
+                        new InputStreamReader(stream, encoding)
+                    end);
+        nok := false;
+        readerHandle r
+    finally
+        if nok then
+            stream::close()
+        end
+    end
+);
+
+let writerHandle writer is ~BufferedWriter -> `a = {
+    write s is string -> () =
+        writer::write(s cast ~String),
+    writeln s is string -> () =
+        writer::write(s cast ~String);
+        writer::newLine(),
+    flush () = writer::flush(),
+    close () = writer::close(),
+};
+
+let outputHandle stream encoding is ~OutputStream -> string -> `a = (
+    var nok = true;
+    try
+        let w = new BufferedWriter(
+            if encoding == "" then
+                new OutputStreamWriter(stream)
+            else
+                new OutputStreamWriter(stream, encoding)
+            end);
+        nok := false;
+        writerHandle w
+    finally
+        if nok then
+            stream::close()
+        end
+    end
+);
+
+let openInFile name is string -> string -> `a =
+    inputHandle new FileInputStream(name);
+
+let openOutFile name is string -> string -> `a =
+    outputHandle new FileOutputStream(name);
+
+typedef bin_input_handle = {
+    .read is ~byte[] -> number -> number,
+    .close is () -> ()
+};
+
+let binInputHandle istream is ~InputStream -> `a = {
+    read buf from is ~byte[] -> number -> number =
+        istream::read(buf, from, length buf - from),
+    close () = istream::close()
+};
+
+let binOutputHandle ostream is ~OutputStream -> `a = {
+
+    write bytes is list?<number> -> () =
+        var i = bytes as ~AbstractIterator;
+        not nullptr? i loop
+            i := i::write(ostream),
+
+    close () = ostream::close(),
+
+    flush () = ostream::flush()
+};
+
+// Exports
+{
+    withHandle,
+
+    readln () = (stdin ()).readln (),
+
+    print v =
+        System::out::print(v);
+        System::out::flush(),
+
+    println v =
+        System::out::println(v),
+
+    eprintln v =
+        System::err::println(v),
+
+    sysExit exitCode =
+        System::exit(exitCode);
+        throw (() as ~Exception),
+
+    threadExit exitCode =
+        throw new ExitError(exitCode),
+
+    readerHandle,
+    inputHandle,
+    openInFile,
+    writerHandle,
+    outputHandle,
+    openOutFile,
+    binInputHandle,
+    binOutputHandle,
+
+    get stdin () = stdin (),
+
+    readFile name encoding =
+        withHandle (openInFile name encoding),
+
+    writeFile name encoding =
+        withHandle (openOutFile name encoding),
+
+    getLines h = h.lines (),
+
+    putLines h lines = for lines h.writeln,
+
+    getContents h = h.contents (),
+
+    binReadFile name =
+        withHandle (binInputHandle new FileInputStream(name is string)),
+
+    binWriteFile name writer is string -> ((list?<number> -> ()) -> `a) -> `a =
+        withHandle (binOutputHandle new FileOutputStream(name is string))
+                   (writer . (.write)),
+
+    binReadAll limit handle
+            is number -> bin_input_handle -> list<number> =
+        Core::readAll(limit, handle.read, handle.close) cast list<number>,
+
+    fetchURL options result url =
+        var csf = id;
+        nohf = const $();
+        var hf = nohf;
+        var sf = nohf;
+        var body = '';
+        var ocs = '';
+        conn = new java.net.URL(url is string
+                    cast ~String)::openConnection();
+        http = if conn instanceof HttpURLConnection then
+                    conn cast ~HttpURLConnection
+               end;
+        try
+            for options $case of
+                /// Callback to determine response body charset.
+                /// Argument is charset from the Content-Type response header.
+                CharSet f: csf := f;
+                /// Set request header.
+                SetHeader {name, value}:
+                    if strUpper name == 'CONTENT-TYPE' then
+                        ocs := strTrim (strRightOf 'CHARSET=' (strUpper value))
+                    end;
+                    conn::setRequestProperty(name, value);
+                /// Set timeout in seconds.
+                Timeout t: conn::setReadTimeout(t * 1000);
+                /// Callback to be called on each response header
+                /// (with header name and value as arguments).
+                Header f: hf := f;
+                /// Set using caches.
+                UseCaches use: conn::setUseCaches(use);
+                /// Callback to be called for the status code and message.
+                Status f: sf := f;
+                /// Send post request with the given body.
+                Post body':
+                    body := body';
+                    conn::setDoOutput(true);
+                end;
+            if conn::getDoOutput() then
+                bytes = (body as ~String)::getBytes(if ocs == '' then 'UTF-8'
+                                                                else: ocs);
+                conn::setRequestProperty('Content-Length', "${length bytes}");
+                os = conn::getOutputStream();
+                try
+                    os::write(bytes)
+                finally
+                    os::close()
+                end;
+            end;
+            stream = conn::getInputStream();
+            try
+                if not same? sf nohf and not nullptr? http then
+                    sf http::getResponseCode() http::getResponseMessage()
+                end;
+                if not same? hf nohf then
+                    var nth = 1;
+                    (name = conn::getHeaderFieldKey(nth);
+                     defined? name and
+                       (hf name conn::getHeaderField(nth);
+                        nth := nth + 1; true)) loop
+                end;
+                case result of
+                /// Apply given function to input_handle
+                /// reading from the response body.
+                Handle f:
+                    cs = strUpper conn::getContentType() |>
+                         strRightOf 'CHARSET=' |> strTrim |> csf;
+                    withHandle (inputHandle stream
+                                 if cs != '' then cs else: 'ISO-8859-1') f;
+                /// Apply given function to InputStream
+                /// reading from the response body.
+                Stream f: f stream;
+                /// Apply given function to bin_input_handle
+                /// reading from the response body.
+                Binary f: f (binInputHandle stream);
+                end
+            finally
+                stream::close()
+            end
+        finally
+            if not nullptr? http then
+                http::disconnect()
+            end
+        end,
+
+    trace msg a = (System::err::println(msg); a),
+
+    runnable f is (() -> ()) -> ~java.lang.Runnable =
+        class Run extends java.lang.Runnable
+            void run()
+                f ()
+        end;
+        new Run(),
+
+    runThread options f is list?<`a> -> (() -> ()) -> ~Thread =
+        let th = new Thread(runnable f);
+        for options
+           $case of
+            /// Mark the thread a daemon thread. The JVM exits when last
+            /// non-daemon thread has stopped.
+            Daemon (): th::setDaemon(true);
+            /// Set the threads context class loader.
+            ClassLoader cl: th::setContextClassLoader(cl);
+            end;
+        th::start();
+        th,
+
+    sleep time = Thread::sleep(time * 1000),
+
+    deleteFile fn is string -> boolean =
+        new File(fn cast ~String)::delete(),
+
+    createPath path is string -> () = _ =
+        new File(path cast ~String)::mkdirs(),
+
+    listDirectory hidden directory is boolean -> string
+            -> list<{name is string, path is string,
+                     file? is boolean, directory? is boolean}> = (
+        let res = array [];
+        for (new File(directory cast ~String)::listFiles()
+                as list<`a>) do f:
+            if hidden or not f::isHidden() then
+                var path = f::getPath();
+                if File::separator == '\' then
+                    path := strReplace '\' '/' path
+                end;
+                let file? = f::isFile();
+                push res {
+                    /// Path to the file or directory.
+                    path = path,
+                    /// Whether this entry denotes a normal file.
+                    file? = file?,
+                    /// Name without any preceding path.
+                    name = f::getName(),
+                    /// Whether this entry denotes a directory.
+                    directory? = not file? and f::isDirectory()
+                }
+            end
+        done;
+        list res),
+
+    get _argv () =
+        Core::ARGV::get() cast array<string>,
+
+    set _argv a =
+        Core::ARGV::set(a cast ~Object),
+}

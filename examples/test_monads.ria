@@ -1,0 +1,5 @@
+program test_monads;
+
+load monad.maybe;
+
+maybe.return 3 |> println;

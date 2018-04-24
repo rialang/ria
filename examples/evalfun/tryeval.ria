@@ -1,0 +1,9 @@
+load funinterface;
+load ria.lang.compiler.eval;
+
+let res = evaluateCode [] []
+            "load funinterface; init do x: '[' ^ string (x * 2) ^ ']' done";
+
+println res;
+let f = function.value;
+println (f 21);

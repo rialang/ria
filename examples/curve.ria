@@ -1,0 +1,25 @@
+let zero = {x = 0, y = 0, z = 0};
+let norm {x, y, z} = sqrt (x * x + y * y + z * z);
+let (/^) p d = {x = p.x / d, y = p.y / d, z = p.z / d};
+let normalize p = p /^ norm p;
+let max' a b = {x = max a.x b.x, y = max a.y b.y, z = max a.z b.z};
+
+let curvePoint n =
+   (x = sin n;
+    cn = cos n;
+    {x, y = cn * 3, z = (x * x) / 2});
+
+let curvePointArray len =
+    map (normalize . curvePoint) [0 .. len - 1];
+
+let arrayMax = fold max' zero;
+
+let benchmark = println . arrayMax . curvePointArray;
+
+for [0 .. 7] do i:
+    println "Run #${i}";
+    let starttime = System::currentTimeMillis();
+    benchmark 5000000;
+    let endtime = System::currentTimeMillis();
+    println "Time: ${endtime - starttime}"
+done

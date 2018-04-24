@@ -1,0 +1,36 @@
+// simple point
+// printer is abstract callback method
+
+let point printer =
+   (var x = 0;
+    var y = 0;
+    {
+        show () =
+            printer "at ${x},${y}\n",
+        move x' y' =
+            x := x';
+            y := y'
+    });
+
+// alternative implementation would be to wrap the printer ;)
+// coloredPoint adds color accessor and overrides show method to print color
+let coloredPoint color printer =
+   (let p = point printer;
+    p with {
+        color,
+
+        show () =
+            printer "${color} ";
+            p.show ()
+    });
+
+// this "class" provides printer using standard print function
+let coloredPrintPoint color =
+    coloredPoint color print;
+
+// and it works...
+let cp = coloredPrintPoint "red";
+cp.move 13 42;
+cp.show ();
+println "cp is ${cp.color}";
+

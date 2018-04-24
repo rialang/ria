@@ -1,0 +1,3 @@
+
+// Split the version number into components
+map number (strSplit '\D+' riaVersion)

@@ -1,0 +1,5 @@
+let a = 2;
+println a;
+a := 3; // Should get an error here
+let a = 4;
+println a;

@@ -1,0 +1,8 @@
+module empty_class;
+
+class X(int a)
+        var x = a,
+        f _ = x,
+        int test()
+          f (string 12);
+end;

@@ -1,0 +1,13 @@
+// Tail recursive version of random number guessing game
+
+let given = randomInt 1000 + 1;
+println "Thought a number in range 1...1000, guess it?";
+(let guess n =
+   (print "> ";
+    v = number (readln ());
+    if v == given then
+        println "Correct! ${n} tries.";
+    else
+        println if v < given then "Too small." else "Too big." end;
+        guess (n + 1);
+    end)) 1;

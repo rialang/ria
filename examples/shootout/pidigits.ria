@@ -1,0 +1,30 @@
+let flr x y = (y.q * x + y.r) div (y.s * x + y.t);
+let comp1 x y = { q = x.q * y.q + x.r * y.s,
+                  r = x.q * y.r + x.r * y.t,
+                  s = x.t * y.s,
+                  t = x.t * y.t };
+let comp2 x y = { q = x.q * y.q,
+                  r = x.q * y.r + x.r * y.t,
+                  s = x.s * y.q,
+                  t = x.s * y.r + x.t * y.t };
+let str z l =
+   (x = head l;
+    y = flr 3 z;
+    if y == flr 4 z then
+        y :. $(str (comp1 { q = 10, r = -10 * y, s = 0, t = 1 } z) l)
+    else
+        str (comp2 z x) (tail l)
+    end);
+
+let ns k = { q = k, r = 4 * k + 2, s = 0, t = 2 * k + 1 } :. $(ns (k + 1));
+
+let format l n =
+    if not (empty? l) then
+        let l = splitAt 10 l;
+        let s = strJoin "" l.fst;
+        let n = n + strLength s;
+        print "${strPad " " 10 s}\t:${n}\n";
+        format l.snd n
+    end;
+
+format (take (number _argv[0]) (str { q = 1, r = 0, s = 0, t = 1 } (ns 1))) 0

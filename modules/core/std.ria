@@ -1,0 +1,3088 @@
+/// Ria standard library.
+
+module ria.lang.std;
+
+import java.lang.IllegalArgumentException;
+import java.util.Map;
+
+/**
+ * Represents a value that may or may not exist.
+ * Used with unwrap and maybe monad
+ */
+typedef maybe<type> = Some type | None ();
+
+/**
+ * Group: exceptions (Exceptions)
+ * Represents a failure of an operation.
+*/
+class FailureException(String what)
+    extends RuntimeException(what)
+end;
+
+/**
+ * Group: zmisc (Miscellaneous functions)
+ * Identity function (I combinator). The argument value will be
+ * returned as is (id x = x).
+*/
+let id x = x;
+
+/**
+ * Group: zmisc
+ * Default bind function. Returns the result of applying
+ * the function to the argument.
+ */
+let bind f v = f v;
+
+/**
+ * Group: array (Array functions)
+ * Creates a new array containing elements from the init list.
+ *
+ * Arguments:
+ *  init - elements in this list will be added into the new array
+ *
+ * Examples:
+ *
+ * Create an empty array and add some value:
+ * : someArray = array [];
+ * : push someArray "test";
+ *
+ * Create an array containing some given elements:
+ * : numbers = array [1..5];
+ */
+let array l is list?<`a> -> array<`a> =
+    new MutableList(l) cast array<`a>;
+
+/**
+ * Group: list (List and sequence functions)
+ * Creates and returns a lazy list concatenating a sequence of sequences
+ * (flattening it).
+ *
+ * Arguments:
+ * sequence - a sequence of sequences
+ *
+ * Description:
+ * The elements of sequences in the given sequence argument are all concatenated
+ * together in the same order. The resulting list is created lazily,
+ * as consumed (and the flatten argument is also consumed lazily, as needed).
+ *
+ * The result is affected (and unspecified), when array(s) are given as
+ * flatten argument and mutated before consuming the resulting list. A strict
+ * result list or array can be created by applying `copy` or `array` function
+ * to the lazy list returned by flatten (for example (copy . flatten)).
+ *
+ * Examples:
+ * : flatten [[3..6], [5..7], [4]]
+ * The result is [3, 4, 5, 6, 5, 6, 7, 4].
+ */
+let flatten l is list?<list?<`a>> -> list<`a> =
+    if empty? l then
+        []
+    else
+        ConcatLists::concat(l) cast list<`a>
+    end;
+
+/**
+ * Group: list
+ * Takes value and first element of the sequence and applies the given
+ * function to them, then repeats with following sequence elements, using
+ * the result from previous application as the new value. Returns the result
+ * of last application (or initial value when empty sequence was given).
+ *
+ * Arguments:
+ *  function - two-argument function used for folding
+ *  value - initial value
+ *  sequence - list or array to fold
+ *
+ * Examples:
+ * : fold function value [a, b, c]
+ *
+ * is equivalent to:
+ * : ((value `function` a) `function` b) `function` c
+ *
+ * Calculate a sum of sequence:
+ * : sum l = fold (+) 0 l;
+ *
+ * Calculate a factorial:
+ * : factorial n = fold (*) 1 [1..n];
+ *
+ * The `fold` function could be implemented in the following way:
+ * : fold function value sequence =
+ * :     case sequence of
+ * :     x :: xs: fold function (function value x) xs;
+ * :     _: value;
+ * :     end;
+ */
+let fold f is (`a -> `b -> `a) -> `a -> list?<`b> -> `a = (
+    let f2 v l is `a -> list?<`b> -> `a = // hack to get good code for gc
+        if nullptr? l then
+            v
+        else
+            (l cast ~AbstractList)::fold(f, v) cast `a
+        end;
+    f2
+);
+
+/**
+ * Group: list
+ * Finds a sequence element, for which the predicate function returns true
+ * and returns the sequence tail starting from that element, or empty list
+ * when the given predicate isn't true for any list element.
+ *
+ * Arguments:
+ *  predicate - function that returns true for the searched value
+ *  sequence  - list or array to be searched
+ *
+ * Examples:
+ *  : find (== 3) [1..5] // gives a list [3, 4, 5]
+ */
+let find f l is (`a -> boolean) -> list?<`a> -> list<`a> =
+    if nullptr? l then
+        []
+    else
+        (l cast ~AbstractList)::find(f) cast list<`a>
+    end;
+
+/**
+ * Group: list
+ * Returns 0-based index of the first sequence element, which equals
+ * to the given value (using == for equality), or -1 when no element is found.
+ *
+ * Arguments:
+ *  value    - value to search for
+ *  sequence - list or array to be searched
+ *
+ * Examples:
+ *  : index 'apples' ['oranges', 'apples', 'rats'] // returns 1
+ */
+let index v l is `a -> list?<`a> -> number =
+    if nullptr? l then
+        -1
+    else
+        res = (l cast ~AbstractList)::index(v);
+        if nullptr? res then -1 else res end
+    end;
+
+/**
+ * Group: hash (Hash map functions)
+ * Returns list of hash map keys.
+ *
+ * Arguments:
+ *  hash - the hash map
+ */
+let keys h is hash<`a, `b> -> list<`a> =
+    if empty? h then
+        []
+    else
+        new MutableList((h cast ~Map)::keySet()::toArray())
+            cast list<`a>
+    end;
+
+/**
+ * Group: hash
+ * Creates a hash mapping from given list elements to unit values (you can
+ * think of it being a set). As the hash map is essentially unordered,
+ * the ordering that was present in the given list will be lost.
+ *
+ * Arguments:
+ *  list - values to use as hash keys
+ *
+ * Examples:
+ * : hash [11, 22] == [11: (), 22: ()]
+ */
+let hash l is list?<`a> -> hash<`a, ()> = (
+    let h = [:];
+    for l (_ i = h[i] := ());
+    h
+);
+
+/**
+ * Group: hash
+ * Iterates over hash map, calling the block function for each
+ * hash map entry with key and value as arguments.
+ *
+ * Arguments:
+ *  hash  - hash map to iterate
+ *  block - function to call
+ *
+ * Examples:
+ *
+ * Print each hash map key-value pair on separate line.
+ * : h = ['test': 54, 'that': 42];
+ * : forHash h do k v:
+ * :    println "${k}: ${v}\n";
+ * : done
+ */
+let forHash h f is hash<`a, `b> -> (`a -> `b -> ()) -> () = (
+    // also used as forMap implementation
+    let i = (h cast ~Map)::entrySet()::iterator();
+    i::hasNext() loop (
+        let e = i::next() cast ~java.util.Map$Entry;
+        f (e::getKey() cast `a) (e::getValue() cast `b)
+    )
+);
+
+/**
+ * Group: list
+ * Returns a list [function(a), function(b), ...] for sequence [a, b, ...]
+ * by applying the function to each element of the sequence (either
+ * lazily or strictly).
+ *
+ * Arguments:
+ *  function - function applied to the sequence elements
+ *  sequence - list or array to be processed
+ *
+ * Description:
+ * A lazy list is returned when applied on normal list. Full result
+ * is not calculated in this case on application, but lazily as the
+ * result is consumed by caller. Arrays and lists backed by arrays
+ * are mapped strictly.
+ *
+ * You should ALWAYS use the strict `map'` instead, if the mapping function
+ * has side effects, as it's not determined whether the function is applied
+ * by `map` on some sequence element when `map` was called, some time later
+ * or even never at all (if the result list was not consumed).
+ */
+let map f l is (`a -> `b) -> list?<`a> -> list<`b> =
+    if empty? l then
+        []
+    else
+        (l cast ~AbstractList)::map(f) cast list<`b>
+    end;
+
+/**
+ * Group: list
+ * Returns strict list [function(a), function(b), ...] for sequence
+ * [a, b, ...] by applying the function to each element of the sequence.
+ *
+ * Arguments:
+ *  function - function applied to the sequence elements
+ *  sequence - list or array to be processed
+ *
+ * Description:
+ * It is similar to `map` function, but never creates a lazy list.
+ * The `map'` is usually faster than `map` on lists, unless huge streams
+ * are processed or most of the resulting list is not used. It works
+ * identically to `map` on arrays.
+ */
+let map' f l is (`a -> `b) -> list?<`a> -> list<`b> =
+    if empty? l then
+        []
+    else
+        (l cast ~AbstractList)::smap(f) cast list<`b>
+    end;
+
+/**
+ * Group: zmisc
+ * Access any value at runtime. Returns variant tagged with values
+ * runtime type.
+ *
+ * The peekObject function may not be always accurate, as full type
+ * information is not available at runtime (for example empty list is
+ * indistinguishable from (), element types of empty collections
+ * remain unknown and function types cannot be determined).
+ *
+ * Arguments:
+ *   value - value to peek into
+ */
+let peekObject object = (
+    let o = object as ~Object;
+    if nullptr? o then
+        List []
+    elif o instanceof String then
+        String (o cast string)
+    elif o instanceof RiaNum then
+        Number (o cast number)
+    elif o instanceof Boolean then
+        Boolean (o cast boolean)
+    elif o instanceof AbstractList then
+        List (map peekObject (o cast list<`a>))
+    elif o instanceof ByKey then
+        let result = [:];
+        let i = (o cast ~Map)::entrySet()::iterator();
+        i::hasNext() loop (
+            e = i::next() cast ~java.util.Map$Entry;
+            result[peekObject (e::getKey() cast `a)] :=
+                peekObject (e::getValue() cast `a)
+        );
+        Hash result
+    elif o instanceof Struct then
+        let st = o cast ~Struct;
+        let fields = map' (_ n = st::name(n)) [0 .. st::count() - 1];
+        Struct {
+            fields,
+            value name =
+                let i = (fields cast ~AbstractList)::index(name is string);
+                if nullptr? i then
+                    throw new NoSuchKeyException("No such field (${name})")
+                end;
+                peekObject (st::get(i) cast `a)
+        }
+    elif o instanceof Tag then
+        let t = o cast ~Tag;
+        Variant {tag = t::name, value = peekObject (t::value cast `a)}
+    else
+        Object o
+    end
+);
+
+let plus a b = a + b;
+
+// Return value
+{
+    /**
+     * Group: zmisc
+     * Short-hand constant for None () value.
+     */
+    none = None (),
+
+    /**
+     * Group: zmisc
+     * K combinator - returns constant function $x (which returns value
+     * of the (first) argument x).
+     *
+     * Arguments:
+     * x - value to be returned by resulting function
+     *     (`const x ()` is same as `x`).
+     */
+    const x = (_ = (); $x),
+
+    /**
+     * Group: zmisc
+     * Application in reverse order. Expression (`value |> function`)
+     * is equivalent to (`function value`).
+     *
+     * Arguments:
+     * value - value given as argument to the function
+     * function - function to apply
+     *
+     * Description:
+     * The |> operator can be used to pipe value of expression through multiple
+     * functions. Calls to |> are usually inlined into direct application by the Ria
+     * compiler (if possible). Due to low priority (just above type operators is
+     * and as) the parenthesis around function and argument expressions can be
+     * omitted usually.
+     *
+     * Examples:
+     * : a = iterate (+ 1) 0 |> take 5 |> map (*2);
+     *
+     * is same as:
+     * : a = map (*2) (take 5 (iterate (+ 1) 0));
+     *
+     * both resulting with a = [0,2,4.6,8].
+     */
+    (|>) arg f = f arg,
+
+    /**
+     * Group: 1_collections
+     * Array/hash subscription operator collection[key] as function.
+     * Returns element at corresponding key (index).
+     *
+     * Arguments:
+     * collection - array or hash table
+     * key - array index or hash table key
+     *
+     * Exceptions:
+     * NoSuchKey - if the key doesn't exist in the given collection
+     *
+     * Examples:
+     * : numbers = [1: "one", 2: "two", 3: "three"];
+     * : println (map (at numbers) [3, 1]); // ["three","one"]
+     */
+    at h k = h[k],
+
+    /**
+     * Group: zmisc
+     * Binary function composition. Composes binary f and
+     * unary g so that arguments to f are transformed by applying g.
+     *
+     * Arguments:
+     * f - binary function
+     * g - unary function used to transform arguments to f
+     *
+     * Description:
+     * : on f g x y = f (g x) (g y)
+     *
+     * Examples:
+     * : list = [{name="X",v=6},{name="A",v=33}];
+     * : sorted = sort (on (<) (.name)) list;
+     *
+     * The list is sorted by name structure field.
+     */
+    on f g is (`a -> `a -> `b) -> (`c -> `a) -> `c -> `c -> `b =
+        new On(f, g) cast `a,
+
+    /**
+     * Group: 0_logic (Logical and comparison operators)
+     * Logical negation of the value.
+     *
+     * Arguments:
+     * value - logical value
+     */
+    unbind (not) v = not v,
+
+    /**
+     * Group: 0_logic
+     * Logical conjunction of a and b.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (and) a b = a and b,
+
+    /**
+     * Group: 0_logic
+     * Logical disjunction of a or b.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (or) a b = a or b,
+
+    /**
+     * Group: 1_collections
+     * Checks whether a key exists in the given hash map or array.
+     *
+     * Arguments:
+     * key - key value (or array index) to search for
+     * map - hash map or array to be checked
+     *
+     * Examples:
+     * : h = ['a': 11, 'b': 22];
+     * : printKey k =
+     * :     if k in h then
+     * :         println "h[${k}] = ${h[k]}"
+     * :     else
+     * :         println "${k} doesn't exist"
+     * :     end;
+     * : printKey 'b'; // prints h[b] = 22
+     * : printKey 'c'; // prints c doesn't exist
+     */
+    unbind (in) a b = a in b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a and b values are equal (and false otherwise).
+     *
+     * It is internally implemented on most data types using .equals()
+     * method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (==) a b = a == b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a and b values are not equal (and false otherwise).
+     *
+     * It is internally implemented on most data types using .equals()
+     * method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (!=) a b = a != b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a value is less than b value (and false otherwise).
+     *
+     * It is internally implemented on most data types using
+     * Comparable.compareTo() method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (<)  a b = a <  b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a value is less than or equal to b value
+     * (and false otherwise).
+     *
+     * It is internally implemented on most data types using
+     * Comparable.compareTo() method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (<=) a b = a <= b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a value is greater than b value (and false otherwise).
+     *
+     * It is internally implemented on most data types using
+     * Comparable.compareTo() method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (>)  a b = a >  b,
+
+    /**
+     * Group: 0_logic
+     * Returns true when a value is greater than or equal to b value
+     * (and false otherwise).
+     *
+     * It is internally implemented on most data types using
+     * Comparable.compareTo() method on the corresponding JVM value.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    unbind (>=) a b = a >= b,
+
+    /**
+     * Group: num (Numeric functions)
+     * Arithmetic sum of the values a and b.
+     *
+     * The result may not be accurate when applied to rational numbers
+     * with very big numerator or denominator part as these overflow into
+     * double-precision floating point numbers.
+     *
+     * Arguments:
+     * a - first number
+     * b - second number
+     */
+    unbind (+)      = plus,
+
+    /**
+     * Group: num
+     * Substracts subtrahend from minuend and returns the difference.
+     *
+     * The result may not be accurate when applied to rational numbers
+     * with very big numerator or denominator part as these overflow into
+     * double-precision floating point numbers.
+     *
+     * Arguments:
+     * minuend    - number to substract from
+     * subtrahend - number to substract
+     */
+    unbind (-)  a b = a - b,
+
+    /**
+     * Group: num
+     * Arithmetic product of the values a and b.
+     *
+     * The result may not be accurate when applied to rational numbers
+     * with very big numerator or denominator part as these overflow into
+     * double-precision floating point numbers.
+     *
+     * Arguments:
+     * a - first number
+     * b - second number
+     */
+    unbind (*)  a b = a * b,
+
+    /**
+     * Group: num
+     * Divides dividend with divisor and returns the quotient.
+     *
+     * The result is rational number, when integer values fitting into
+     * 32 bits are divided.
+     *
+     * The result may not be accurate when applied to big integers or
+     * rational numbers with very big numerator or denominator part as
+     * these overflow into double-precision floating point numbers.
+     *
+     * Arguments:
+     * dividend - the number to divide
+     * divisor  - dividend is divided by divisor
+     */
+    unbind (/)  a b = a / b,
+
+    /**
+     * Group: num
+     * Remainder of division of the integer part of dividend
+     * with integer part of divisor.
+     *
+     * Arguments:
+     * dividend - the number to divide
+     * divisor  - dividend is divided by divisor
+     */
+    unbind (%)  a b = a % b,
+
+    /**
+     * Group: zmisc
+     * Function composition - (f . g) x is same as f (g x).
+     * Composes unary f and g into single function, where f is
+     * applied to the result of application of g (to argument).
+     *
+     * Arguments:
+     * f - first function
+     * g - second function
+     *
+     * Examples:
+     * : printLength = print . length;
+     * : printLength [4,5,6]; // prints 3
+     *
+     * This is equivalent to:
+     * : printLength x = print (length x);
+     * : printLength [4,5,6]; // prints 3
+     */
+    unbind (.)  a b = a . b,
+
+    /**
+     * Group: list
+     * Constructs a new list by prepending value to tail list.
+     *
+     * Arguments:
+     * value - value to be prepended
+     * list  - list used as tail of the constructed list
+     *
+     * Examples:
+     * The following expressions result in equivalent lists.
+     * : a :+ [b, c] == [a, b, c]
+     */
+    unbind (:+) v l = v :+ l,
+
+    /**
+     * Group: list
+     * Constructs a new list from head value and function that would return
+     * the tail list. The function will be applied once, when the list
+     * tail is requested for the first time. This allows creating lazy and
+     * possibly infinite lists or streams.
+     *
+     * Arguments:
+     * value    - value used as new list head
+     * function - function that would return the list tail, when applied
+     *            to unit value
+     */
+    unbind (:.) v l = v :. l,
+
+    /**
+     * Group: regex (Regular expressions)
+     * Returns true when regular expression has a match in the haystack string
+     * (and false otherwise).
+     *
+     * Arguments:
+     * haystack - string where to search the given regex match
+     * regex    - string representing a regular expression
+     *
+     * Description:
+     * The regular expression is compiled and matched using the java.util.regex
+     * implementation, and therefore uses the same (Perl regular expression
+     * compatible) syntax. The Ria compiler optimises usage of this operator
+     * when a literal string is used as regex argument, so that the regex will
+     * be compiled only once into the java.util.regex.Pattern instance.
+     *
+     * Examples:
+     * : if str =~ '\d' then
+     * :     println "'${str}' contains a number in it."
+     * : end
+     */
+    unbind (=~) s p = s =~ p,
+
+    /**
+     * Group: regex
+     * Returns true when regular expression has no match in the haystack string
+     * (and false if it has).
+     *
+     * Arguments:
+     * haystack - string where to search the given regex match
+     * regex    - string representing a regular expression
+     *
+     * Description:
+     *
+     * This operator is negation of the =~ operator and could be defined in the
+     * following way:
+     * : (!~) haystack regex = not (haystack =~ regex)
+     *
+     * The regular expression is compiled and matched using the java.util.regex
+     * implementation, and therefore uses the same (Perl regular expression
+     * compatible) syntax. The Ria compiler optimises usage of this operator
+     * when a literal string is used as regex argument, so that the regex will
+     * be compiled only once into the java.util.regex.Pattern instance.
+     *
+     * Examples:
+     * : if str !~ '\d' then
+     * :     println "'${str}' has no number in it."
+     * : end
+     */
+    unbind (!~) s p = s !~ p,
+
+    /**
+     * Group: num
+     * Divides integer part of dividend with integer part of divisor
+     * and returns the integer part of quotient.
+     *
+     * Arguments:
+     * dividend - the number to divide
+     * divisor  - dividend is divided by integer part of divisor
+     */
+    unbind (div) a b = a div b,
+
+    /**
+     * Group: num
+     * Shifts bit representation of integer part of the value
+     * to left by given count of bits and returns the result.
+     *
+     * Arguments:
+     * value - the value to shift
+     * count - how much to shift
+     */
+    unbind (shl) a b = a shl b,
+
+    /**
+     * Group: num
+     * Shifts bit representation of integer part of the value
+     * to right by given count of bits and returns the result.
+     *
+     * Arguments:
+     * value - the value to shift
+     * count - how much to shift
+     */
+    unbind (shr) a b = a shr b,
+
+    /**
+     * Group: num
+     * Returns bitwise XOR of integer parts of arguments a and b.
+     *
+     * Arguments:
+     * a - first number
+     * b - second number
+     */
+    unbind (xor) a b = a xor b,
+
+    /**
+     * Group: num
+     * Returns bitwise OR of integer parts of arguments a and b.
+     *
+     * Arguments:
+     * a - first number
+     * b - second number
+     */
+    unbind (b_or) a b = a b_or b,
+
+    /**
+     * Group: num
+     * Returns bitwise AND of integer parts of arguments a and b.
+     *
+     * Arguments:
+     * a - first number
+     * b - second number
+     */
+    unbind (b_and) a b = a b_and b,
+
+    /**
+     * Group: num
+     * Returns algebralic negation of argument value (negate value = -value).
+     *
+     * Arguments:
+     * value - value to negate
+     */
+    unbind negate a = negate a,
+
+    /**
+     * Group: zmisc
+     * Check whether given value is a JVM null pointer, and returns true
+     * when it is.
+     *
+     * Arguments:
+     * value - value to check
+     *
+     * Notes:
+     * Use `defined?` instead, unless you really know what you're doing.
+     * The low-level check done by `nullptr?` may behave unexpectedly
+     * together with some conversions done by the Ria compiler (for example
+     * `nullptr? (System::getenv('???')`) is always false).
+     */
+    unbind nullptr? a = nullptr? a,
+
+    /**
+     * Group: zmisc
+     * Checks whether given value is defined, and returns true when it is.
+     * Undefined values are JVM null pointer, undef_str and undef_bool.
+     *
+     * Arguments:
+     * value - value to check
+     *
+     * Notes:
+     * The unit value () is internally represented by JVM null pointer,
+     * and therefore defined? () is false.
+     *
+     * Empty lists are often also considered to be undefined because
+     * of being represented by null pointer (but empty arrays are not).
+     * You should use `empty?` to detect empty lists.
+     */
+    unbind defined? a = defined? a,
+
+    /**
+     * Group: 1_collections
+     * Checks whether a collection is empty, and returns true when it is.
+     *
+     * This function works on all kinds of standard collections - lists,
+     * arrays and hashes implement the `map<>` interface.
+     *
+     * Arguments:
+     * collection - collection to check
+     */
+    unbind empty? a = empty? a,
+
+    /**
+     * Group: 1_collections (Generic collection functions)
+     * Returns count of elements in collection.
+     *
+     * Arguments:
+     *   collection - a list, array or hash map
+     *
+     * Description:
+     * For list or array it's length is returned, and for hash map the number of
+     * key-value pairs in that hash map. The `length` function can also be applied
+     * to Java arrays (for example `length new int[10]`), as the Ria compiler wraps
+     * these automatically into lists on function arguments.
+     */
+    unbind length a = length a,
+
+    /**
+     * Group: list
+     * Returns the first element of sequence (which must be non-empty).
+     *
+     * Arguments:
+     * sequence - the list or array from which to extract the first element
+     *
+     * Exceptions:
+     * java.lang.NullPointerException - when used on empty list
+     * ria.lang.EmptyArrayException   - when used on empty array
+     */
+    unbind head a = head a,
+
+    /**
+     * Group: list
+     * Returns the tail of sequence consisting of all elements except
+     * the first (head) one. Using tail is equivalent to using drop 1.
+     *
+     * Arguments:
+     * sequence - the list or array to use
+     *
+     * Notes:
+     * The `tail` function can be used on array. In this case a list view
+     * of array is returned, consisting of all elements starting from
+     * index 1 (subsequent applications of tail give views with increased
+     * start index). As the list view still references to the original
+     * array, it will change when the array is modified (use `copy` function
+     * to get an independent copy).
+     */
+    unbind tail a = tail a,
+
+    /**
+     * Group: 0_logic
+     * Identity check - returns true when a and b reference to the same
+     * object instance (and false otherwise).
+     *
+     * Arguments:
+     * a - first value reference
+     * b - second value reference
+     *
+     * Notes:
+     * It is equivalent to Java == operator (barring primitive values,
+     * which don't exist in Ria anyway).
+     */
+    unbind same? a b = same? a b,
+
+    /**
+     * Group: list
+     * Iterates over sequence, applying the block function to the element
+     * value for each sequence element.
+     *
+     * Arguments:
+     *  sequence - list or array to iterate
+     *  block    - function to call
+     *
+     * Examples:
+     *
+     * Print numbers from 1 to 100, using for on range list.
+     * : for [1..100] do i:
+     * :     println i
+     * : done
+     */
+    unbind for l f = for l f,
+
+    /**
+     * Group: list
+     * Iterates over sequence, applying the block function to the element
+     * value for each sequence element. Arguments in reverse order from for.
+     *
+     * Arguments:
+     *  block    - function to call
+     *  sequence - list or array to iterate
+     *
+     * Examples:
+     *
+     * Print numbers from 1 to 100, using for on range list.
+     * : foreach do i:
+     * :     println i
+     * : done [1..100]
+     */
+    unbind foreach f l = foreach f l,
+
+    /**
+     * Group: zmisc
+     * Acquires an intrinsic monitor lock on behalf of the executing thread,
+     * applies the block to (), then releases the lock. It is equivalent to
+     * executing the block in Java synchronized block.
+     *
+     * Arguments:
+     *  monitor - object that is used for the lock (value of any type can
+     *            be use as long as nullptr? monitor is false)
+     *  block   - function that is applied while the monitor lock is hold
+     *
+     * Exceptions:
+     *  java.lang.NullPointerException - when monitor is a JVM null pointer
+     *
+     * Examples:
+     * : var nameCount = 0;
+     * : var lastName = '';
+     * :
+     * : addName name =
+     * :     latch addName do:
+     * :          lastName := name;
+     * :          nameCount := nameCount + 1;
+     * :     done;
+     *
+     * The `addName` function is used as a monitor here.
+     */
+    unbind latch monitor block = latch monitor block,
+
+    /**
+     * Group: zmisc
+     * Throws the given exception. Equivalent to the Java throw operator.
+     * As the exception is thrown, the function never returns normally.
+     *
+     * Arguments:
+     * exception - exception instance to be thrown
+     *
+     * Examples:
+     * : throw new IllegalArgumentException("Bad example");
+     *
+     * Exceptions:
+     * NullPointerException - This is thrown if the given exception is
+     *                        Java null pointer.
+     */
+    unbind throw exception = throw exception,
+
+    /**
+     * Group: str (String functions)
+     * Returns the result of concatenating strings a and b.
+     *
+     * Arguments:
+     * a - first string
+     * b - second string
+     *
+     * Notes:
+     * Using this operator is equivalent to the embedded string expression
+     * "${a}${b}" except for requiring the arguments to be of string type.
+     */
+    (^) a b is string -> string -> string = "${a}${b}",
+
+    /**
+     * Group: list
+     * Appends two sequences a and b lazily, returns the resulting list.
+     *
+     * Arguments:
+     * a - first sequence (list or array)
+     * b - second sequence (list or array)
+     *
+     * Description:
+     * The list append operator creates a lazy list, which copies
+     * the first sequence on the fly (as elements are requested),
+     * and when it ends, gives the second sequence as the list tail.
+     *
+     * If first sequence (a) is an infinite list, then the result is
+     * equivalent to it.
+     *
+     * If the second sequence (b) is an array, and is later mutated,
+     * then the resulting list will see the modified array as its tail
+     * (use `copy` function to get an independent copy).
+     *
+     * Examples:
+     * : for ([1..4] ++ [13..15]) println;
+     *
+     * Prints numbers 1, 2, 3, 4, 13, 14, 15. No list containing those
+     * numbers is never allocated (as lazy ranges are lazily appended).
+     *
+     * Notes:
+     * The created lazy list head holds references to both concatenated
+     * list heads. When the resulting list is iterated (tail is requested),
+     * the next element from first list is requested using `next()` method
+     * on the internal list object (when end of first list is reached, then
+     * the second list is given directly as a tail). This means that left
+     * folding (++) will result in actual Java call stack depth porpotional
+     * to the (++) nesting depth on the left side.
+     * : x = tail (((([1] ++ [2]) ++ [3]) ++ [4]) ++ [5]);
+     * In the above example five `++` operators are nested by left side,
+     * resulting call stack depth of 5 for the concatenation (without
+     * parenthesis the ++ operators would associate on the right side).
+     * This can cause problems when deep nesting is created, for example
+     * the following naive implementation of `flatten` will likely result
+     * in throwing StackOverflowError:
+     * : flatten = fold (++) [];
+     * : flatten (map \[1] [1..10000]);
+     * The library implementation of flatten doesn't use (++) internally for
+     * this reason.
+     */
+    (++) a b is list?<`a> -> list?<`a> -> list<`a> =
+        if empty? a then
+            b as ~Object cast `a
+        elif empty? b then
+            a as ~Object cast `a
+        else
+            new ConcatList(a, b) cast list<`a>
+        end,
+
+    /**
+     * Group: zmisc (Miscellaneous functions)
+     * Generic structure-object reference operator. It gets a `(->)` field from
+     * the object, applies it to the key argument and returns the result.
+     *
+     * Arguments:
+     * object - a structure with `(->)` field
+     * key    - name or id of the referenced value
+     *
+     * Description:
+     * The implementation is simply the following:
+     * : (->) object key =
+     * :     object.``->`` key;
+     *
+     * This means that the `->` operator works with any structure that defines
+     * the `(->)` member function. The compiler gives the `->` operator highest
+     * priority (same as structure field reference `(.)`, and object field
+     * reference `(::)`), therefore the `->` with custom-defined meaning can
+     * be easily used in row with those other field reference operators.
+     */
+    (->) object field =
+        object.``->`` field,
+
+    // stupid struct polymorphism restriction. is it really needed?
+    array, flatten, fold, find, id, index, keys, hash, map, map',
+    forHash, peekObject,
+
+    /**
+     * Group: list
+     * Returns a list of elements obtained by applying the function
+     * to each element of the Java collection.
+     *
+     * Arguments:
+     *  function - function applied to list elements
+     *  collection - java.util.Collection instance (may be null,
+     *               empty list is returned in this case)
+     */
+    mapJavaList f l is (~Object -> `a) -> ~java.util.Collection -> list<`a> =
+        if nullptr? l then
+            []
+        else
+            map f l::toArray()
+        end,
+
+    /**
+     * Group: hash
+     * Iterates over Java map, calling the block function for each
+     * map entry with key and value as arguments.
+     *
+     * Arguments:
+     *  map   - java.util.Map instance to iterate
+     *  block - function to call
+     *
+     * Examples:
+     * : forJavaMap System::getProperties() do name value:
+     * :    println {name, value}
+     * : done
+     * Prints system properties.
+     */
+    forJavaMap = forHash cast ~ria.lang.Fun cast
+        ~java.util.Map -> (~Object -> ~Object -> ()) -> (),
+
+    /**
+     * Group: list
+     * Gives values from collection as a list.
+     *
+     * Arguments:
+     * collection - a list, array or hash map
+     *
+     * Description:
+     * List is returned as is. A list view is returned for an array
+     * (implementation wise just a type cast), so it will change when the
+     * original array is modified. Differently from array, an independent
+     * list consisting of values from the key-value pairs is created and
+     * returned when the collection is a hash map.
+     *
+     * Either returned list or collection given as argument should be
+     * explicitly copied (using `copy` function), if you want to store the
+     * result for later usage and the original collection might change.
+     *
+     * Relying on the mutating list-view of an array is best
+     * to be avoided - having direct reference to the original
+     * collection is more straight-forward solution.
+     */
+    list a is map<`k, `a> -> list<`a> =
+        if empty? a then
+            []
+        else
+            (a cast ~ria.lang.Collection)::asList() cast list<`a>
+        end,
+
+    /**
+     * Group: 1_collections
+     * Swaps two array/hash map element values stored at indexes i and j.
+     *
+     * Arguments:
+     *  map - array or hash table
+     *  i   - index/key
+     *  j   - index/key
+     *
+     * Description:
+     * The canonical implementation is following:
+     * : swapAt map i j =
+     * :    (tmp = map[i];
+     * :     map[i] := map[j];
+     * :     map[j] := tmp);
+     */
+    swapAt a i j =
+        x = a[i];
+        a[i] := a[j];
+        a[j] := x,
+
+    /**
+     * Group: zmisc
+     * Applies function to two arguments in reverse order.
+     * Useful for swapping binary functions arguments.
+     *
+     * Arguments:
+     * function - function to apply
+     * x        - second argument to give to the function
+     * y        - first argument to give to the function
+     *
+     * Description:
+     * : flip function x y = function y x;
+     *
+     * The result of applying `flip` to binary function is a function that takes
+     * its two arguments in the reverse order of the original function.
+     *
+     * Examples:
+     * The (>) operator could be defined in the terms of (<) using flip.
+     * : (>) = flip (<);
+     */
+    flip f x y =
+        f y x,
+
+    /**
+     * Group: zmisc
+     * Memoizes the promise function with unit argument and returns the
+     * memoized function.
+     *
+     * Arguments:
+     * promise - a function taking () as argument, used as encapsulation
+     *           of an expression
+     *
+     * Description:
+     * The application of lazy results in memoized promise, which in essence
+     * is a suspension of lazily evaluated expression. The evaluation can
+     * be forced by applying this memoized promise to unit value (). The result
+     * of evaluation is saved and returned, when it is forced and successfully
+     * evaluated first time, and later applications of the memoized function
+     * will return the saved result.
+     *
+     * If the evaluation fails to return a result, throwing an exception
+     * instead, then subsequent attempt to force evaluation by applying the
+     * memoized promise will cause a re-evaluation of the promise function
+     * (by applying it again to the ()).
+     *
+     * Successful evaluation of the original promise may happen multiple times,
+     * if done concurrently as a race in multiple threads.
+     *
+     * Examples:
+     * : lazy_sum = lazy $(sum [1..100000000]);
+     * : println (lazy_sum ());
+     * : println (lazy_sum ());
+     *
+     * Here the sum of the large range will be calculated only on the first
+     * application of lazy_sum. The second application returns the result
+     * from first application.
+     */
+    lazy f is (() -> `_a) -> (() -> `_a) =
+        new Lazy(f) cast (() -> `a),
+
+    /**
+     * Group: zmisc
+     * Constructs a pair structure containing arguments fst and snd as fields.
+     *
+     * Arguments:
+     * fst - first field (fst) to the structure
+     * snd - second field (snd) to the structure
+     */
+    pair fst snd =
+        {fst, snd},
+
+    /**
+     * Group: str
+     * Gives string representation of value.
+     *
+     * Arguments:
+     * value - value of any type
+     *
+     * Description:
+     * String values are returned unmodified. Numbers are formatted into
+     * decimal numbers. Rational and floating-point numbers are formatted
+     * using Double::toString(), which uses dot as decimal separator and
+     * uses scientific exponent notation for very small and big values,
+     * like 1.3E20.
+     *
+     * Empty lists and the unit value can be internally represented by JVM
+     * null pointer, which is shown as null. Empty arrays are always shown
+     * as [].
+     *
+     * Lists, hash maps, structures and variant values are formatted using
+     * Ria syntax for them. The values of list/hash elements, structure
+     * fields and variant tag parameters are formatted in the same style
+     * recursively, with an exception for string values and null pointers.
+     * String element/field values are formatted as double-quoted ("string")
+     * Ria string literals, and null pointers as [] (because empty list can
+     * be internally a null pointer). Arrays are formatted exactly like lists.
+     *
+     * : string ()       // () is null pointer in runtime, result is "null"
+     * : string {x = ()} // result is {x=[]}, as here () is a field value
+     *
+     * Following the Ria syntax, lists have comma-separated values
+     * surrounded by [] brackets, for example string list ["Hello", "World\n"].
+     * Hash maps are similar, shown as a list of key: value pairs.
+     * Structures are shown as comma-separated list of field=value bindings
+     * surrounded by {} brackets, for example {a=33, s="something"}.
+     *
+     * The string representation is obtained by calling the Java
+     * String::valueOf(value) method. The library implementation uses
+     * string literal embedded expression:
+     * : string value =
+     * :     "${value}";
+     * This gets compiled down into the String::valueOf() call (as that
+     * is used by compiler on all embedded string expressions unless
+     * the expression type is already known to be string). The actual
+     * formatting described above is done by ::toString() methods in the
+     * internal implementations of those data types.
+     *
+     * Examples:
+     * num_strs = map string [1..10];
+     *
+     * Gets list of numbers 1 to 10 as strings.
+     */
+    string x =
+        "${x}",
+
+    /**
+     * Group: num
+     * Converts the given string into a number and returns the result.
+     *
+     * Arguments:
+     *  string - a string to parse as a number
+     *
+     * Description:
+     * The string argument must be in one of the following formats:
+     *
+     * 1. Decimal integer of arbitrary size. The result will be
+     *    integer number, values not fitting into 64-bit signed integer
+     *    are internally stored using the BigInteger class.
+     *
+     * 2. Octal integer of arbitrary size with "0o" or "0O" as prefix.
+     *    The result will be integer number.
+     *
+     * 3. Hexadecimal integer of arbitrary size with "0x" or "0X" as prefix.
+     *    The result will be integer number.
+     *
+     * 4. Decimal number with fractional part after dot (for example 17.52).
+     *    The result will rational number, if both numerator and denominator
+     *    parts of decimal fraction can be expressed as 32-bit signed integers
+     *    (exact value). Otherwise the result will be double-precision
+     *    floating-point number (possibly inexact value).
+     *
+     * 5. Decimal number with exponent after 'e' or 'E' (for example 1.23e-3).
+     *    Optional fractional part is separated with dot.
+     *    The result will be double-precision floating-point number.
+     *
+     * 6. Decimal number with optional fractional part after dot and 'e' or
+     *    'E' at the end (for example 1e). The result will be double-precision
+     *    floating-point number. This can be used to force creating a
+     *    floating-point number instead of rational or integer number.
+     *
+     * This set of formats is identical to the format of numeric literals
+     * in the Ria source code. Preceding and trailing whitespace characters
+     * are removed before parsing.
+     *
+     * Exceptions:
+     * java.lang.NumberFormatException - when the argument string is not in
+     *                                   a recognized numeric format
+     */
+    number x =
+        Core::parseNum(x is string cast ~String),
+
+    /**
+     * Group: num
+     * Returns the smaller of the two ordered values a and b (the ordering is
+     * as defined by the (<) operator). The result is unspecified if one of
+     * the argument values is floating-point number NaN.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    min a b =
+        if a < b then a else b end,
+
+    /**
+     * Group: num
+     * Returns the greater of the two ordered values a and b (the ordering is
+     * as defined by the (<) operator). The result is unspecified if one of
+     * the argument values is NaN.
+     *
+     * Arguments:
+     * a - first value
+     * b - second value
+     */
+    max a b =
+        if a > b then a else b end,
+
+    /**
+     * Group: num
+     * Returns the absolute value of the given numeric value.
+     *
+     * Arguments:
+     * value - a numeric value
+     */
+    abs a =
+        if a < 0 then -a else a end,
+
+    /**
+     * Group: list
+     * Returns the arithmetic sum of a finite sequence of numbers.
+     * Zero is returned for an empty sequence.
+     *
+     * Arguments:
+     * sequence - list or array of numbers
+     *
+     * Description:
+     * : sum = fold (+) 0;
+     *
+     * For example, sum [1, 2, 3] is computed as 0 + 1 + 2 + 3.
+     */
+    sum l =
+        fold plus 0 l,
+
+    /**
+     * Group: list
+     * Maps a function over the sequence and concatenates the results.
+     * Shorthand for (`flatten . map function`).
+     *
+     * Arguments:
+     *  function - function applied to the sequence elements
+     *  sequence - list or array to be processed
+     */
+    flatMap f l is (`a -> list?<`b>) -> list?<`a> -> list<`b> =
+        if empty? l then
+            []
+        else
+            flatten ((l cast ~AbstractList)::map(f) cast list<`a>)
+        end,
+
+    /**
+     * Group: list
+     * Returns true if and only if there exists a sequence element, for which
+     * the predicate function returns true. A false value is returned otherwise
+     * (empty sequence or predicate is false for all sequence elements).
+     *
+     * Arguments:
+     * predicate - function that returns true or false for sequence element
+     * sequence  - list or array to be scanned
+     */
+    any f l =
+        not nullptr? (find f l),
+
+    /**
+     * Group: list
+     * Returns true, if the predicate function returns true for
+     * all elements of the given sequence or the sequence is empty.
+     * The false value is returned otherwise (predicate is false
+     * for one or more sequence elements).
+     *
+     * Arguments:
+     * predicate - function that returns true or false for sequence element
+     * sequence  - list or array to be scanned
+     */
+    all f l =
+        nullptr? (find (_ x = not f x) l),
+
+    /**
+     * Group: list
+     * Returns first element of the sequence, for which the predicate
+     * returns false, or the last element, when the predicate is
+     * true for all elements of the sequence.
+     *
+     * Arguments:
+     * predicate - function that returns true for elements to avoid
+     * sequence  - sequence of values (array or list)
+     *
+     * Exceptions:
+     * java.lang.IllegalArgumentException - if the given sequence is empty
+     *
+     * Examples:
+     * : avoid (== '') [userOpt, systemOpt, defaultOpt]
+     */
+    avoid f l is (`a -> boolean) -> list?<`a> -> `a =
+        if empty? l then
+            throw new IllegalArgumentException("avoid: empty list")
+        end;
+        var i = l cast ~AbstractIterator;
+        var value = () as ~Object;
+        (value := i::first();
+         i := i::next();
+         not nullptr? i and f (value cast `a)) loop;
+        value cast `a,
+
+    /**
+     * Group: list
+     * Returns true if and only if the sequence contains element equal
+     * to the given value. If there is no such element, false is returned.
+     * Equality is checked as defined by the (==) operator.
+     *
+     * Arguments:
+     * value    - value to search from the sequence
+     * sequence - list or array to be searched
+     */
+    contains? v l is `a -> list?<`a> -> boolean =
+        not (nullptr? l or nullptr? (l cast ~AbstractList)::index(v)),
+
+    /**
+     * Group: zmisc
+     * Returns the default value, when the option is None _, and
+     * result of applying the function to the Some parameter value,
+     * when the option is Some value.
+     *
+     * Arguments:
+     * default  - value to return, when the option argument is None _
+     * function - function to apply to value,
+     *            when the option argument is Some value
+     * option   - a variant Some value | None _
+     */
+    default def f =
+       $case of
+        Some v: f v;
+        None _: def;
+        end,
+
+    /**
+     * Group: list
+     * Splits a given sequence into two parts, putting elements from the start
+     * of the sequence into fst as long as the predicate function is false
+     * for a given element. The rest of the sequence is returned as snd field.
+     *
+     * Arguments:
+     * predicate - predicate function
+     * sequence  - a list or array to split
+     */
+    splitBy pred seq is (`a -> boolean) -> list?<`a>
+                          -> { fst is list<`a>, snd is list<`a> } =
+        let a = new MutableList();
+        var l = seq cast ~AbstractList cast list<`a>;
+        // over-optimized loop from hell. don't code like that.
+        not empty? l and (h = head l; not pred h and (a::add(h); true)) loop
+            l := tail l;
+        { /// Elements from start of the sequence that
+          /// do not satisfy the predicate.
+          fst = if a::isEmpty() then [] else a cast list<`a> end,
+          /// Reminder of the sequence.
+          snd = l },
+
+    /**
+     * Group: list
+     * Splits a given sequence into two parts, returning first n elements
+     * as `fst` and the rest as `snd` field. Full sequence is returned as list
+     * in the `fst` field, if n is equal or greater than the length of the
+     * sequence (and `snd` will be empty list in this case).
+     *
+     * Arguments:
+     * n        - position of the split
+     * sequence - list or array to split
+     *
+     * Description:
+     * : splitAt n sequence = {
+     * :     fst = take n sequence,
+     * :     snd = drop n sequence
+     * : }
+     */
+    splitAt n seq is number -> list?<`a>
+                      -> { fst is list<`a>, snd is list<`a> } =
+        let a = new MutableList();
+        var l = seq cast ~AbstractList cast list<`a>;
+        var n = n;
+        if n < 256 then
+            a::reserve(n)
+        end;
+        n > 0 and not empty? l loop (
+            a::add(head l);
+            l := tail l;
+            n := n - 1
+        );
+        { /// The sequence prefix of length n.
+          fst = if a::isEmpty() then [] else a cast list<`a> end,
+          /// Elements of the sequence starting from the nth element.
+          snd = l },
+
+    /**
+     * Group: list
+     * Returns first n elements of the sequence as a lazy list. All elements
+     * are returned, if n is equal or greater than the length of the sequence.
+     *
+     * Arguments:
+     * n        - how many elements to take
+     * sequence - initial list or array
+     *
+     * Notes:
+     * The given sequence is lazily consumed as the result returned by take
+     * is consumed. If the sequence is a mutable array, and modified after
+     * appling the `take` function, the result of application is undefined.
+     */
+    take n l is number -> list?<`a> -> list<`a> =
+        if nullptr? l or n <= 0 then
+            []
+        else
+            (l cast ~AbstractList)::take(0, n) cast list<`a>
+        end,
+
+    /**
+     * Group: list
+     * Returns the suffix of the sequence (as list) omitting first n
+     * sequence elements. An empty list is returned, if n is equal or
+     * greater than the length of the sequence.
+     *
+     * Arguments:
+     * n        - how many elements to drop from the start of the sequence
+     * sequence - initial list or array
+     *
+     * Notes:
+     * The suffix is returned without copying it. When the `drop` function
+     * is used on an array, a list view of the array is returned, consisting
+     * of all elements starting from index n. As the list view still references
+     * to the original array, it will change when the array is modified (use
+     * `copy` function to get an independent copy).
+     *
+     * The `drop` function is constant-time operation on lists backed by arrays.
+     */
+    drop n l is number -> list?<`a> -> list<`a> =
+        if n <= 0 then
+            l cast ~AbstractList cast list<`a>
+        else
+            (l cast ~AbstractList)::take(n, -1) cast list<`a>
+        end,
+
+    /**
+     * Group: list
+     * Returns a lazy list containing longest prefix of the sequence,
+     * where the predicate function is true for all elements.
+     *
+     * Arguments:
+     * predicate - function used to check the sequence elements
+     * sequence  - list or array to use
+     *
+     * Notes:
+     * The given sequence is lazily consumed as the result returned by
+     * takeWhile is consumed. If the sequence is a mutable array, and
+     * modified after appling the `takeWhile` function, the result of
+     * application is undefined.
+     */
+    takeWhile pred l is (`a -> boolean) -> list?<`a> -> list<`a> =
+        if empty? l then
+            []
+        else
+            TakeWhile::take(l, pred) cast list<`a>
+        end,
+
+    /**
+     * Group: list
+     * Returns an infinite lazy list, where each following element is result
+     * of appling the function to the value of the element before it. The
+     * first element value is given.
+     *
+     * Arguments:
+     * first    - value of the first element in the returned list
+     * function - function to apply to derive the next element value
+     *
+     * Examples:
+     * The result of iterate f x is the following infinite list:
+     * : [x, f x, f (f x), f (f (f x)), ...]
+     *
+     * If addition is used as the function, the result is incrementing sequence:
+     * : take 10 (iterate (+1) 0) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+     */
+    iterate f x is (`a -> `a) -> `a -> list<`a> =
+        new Iterate(x, f) cast list<`a>,
+
+    /**
+     * Group: list
+     * Returns non-duplicate elements of the sequence as a list.
+     * This means that no element in the returned list is equal to
+     * some other element (as defined by ==) in this list.
+     * The original ordering of the sequence is not preserved.
+     *
+     * Arguments:
+     * sequence - list or array to be processed
+     */
+    nub is list?<`a> -> list<`a> =
+        keys . hash,
+
+    /**
+     * Group: list
+     * Returns a list of lists, where each sublist contains only equal elements,
+     * and the concatenation of the result is equal to the original sequence.
+     * Elements are considered equal, when the given predicate function
+     * is true for them.
+     *
+     * Arguments:
+     * predicate - function that returns true for values considered equal
+     * sequence  - list or array to be processed
+     *
+     * Examples:
+     * : groupBy (==) [1,1,0,2,0,0,0,3] == [[1,1],[0],[2],[0,0,0],[3]]
+     */
+    groupBy eq l is (`a -> `a -> boolean) -> list?<`a> -> list<list<`a>> =
+        if empty? l then
+            []
+        else // this is an example of over-optimisation ;)
+            var result = new MutableList();
+            var collector = new MutableList();
+            var i = l cast ~AbstractIterator;
+            var prev = i::first();
+            collector::add(prev);
+            (i := i::next(); not nullptr? i) loop
+               (val = i::first();
+                if not ((val cast `a) `eq` (prev cast `a)) then
+                    result::add(collector);
+                    collector := new MutableList()
+                end;
+                prev := val;
+                collector::add(val));
+            result::add(collector);
+            result cast `l
+        end,
+
+    /**
+     * Group: list
+     * Returns as list the sequence sorted in ascending order according
+     * to the order defined by the (<) comparision operator.
+     *
+     * Arguments:
+     * sequence - list or array to be sorted (not modified by `sort` function)
+     *
+     * Description:
+     * The original sequence is copied and sorted using
+     * java.util.Arrays::sort(Object[]) method. The sequence elements
+     * are required to be of ordered type (`^a`). The result should be similar
+     * to using `sortBy (<)`, although the `sort` function works usually faster.
+     *
+     * Examples:
+     * : sort [3,1,4,1,5,9,2,6,5,3] == [1,1,2,3,3,4,5,5,6,9]
+     */
+    sort l is list?<^a> -> list<^a> =
+        if empty? l then
+            []
+        else
+            (l cast ~AbstractList)::sort() cast list<^a>
+        end,
+
+    /**
+     * Group: list
+     * Returns as list the sequence sorted according to the compare function.
+     * The returned list will be ordered in such manner, that compare x y
+     * returns false for any list elements x and y, where y is before x.
+     * The behaviour of sortBy is undefined, if the compare function doesn't
+     * define total ordering.
+     *
+     * Arguments:
+     * compare  - function to compare two elements ((<) gives ascending order)
+     * sequence - list or array to be sorted (not modified by sortBy function)
+     *
+     * Examples:
+     * : sortBy (<) [3,1,4,1,5,9,2,6,5,3] == [1,1,2,3,3,4,5,5,6,9]
+     *
+     * Notes:
+     * Current implementation uses merge sort algorithm.
+     * Stable sorting is not guaranteed.
+     */
+    sortBy less? l is (`a -> `a -> boolean) -> list?<`a> -> list<`a> =
+        if empty? l then
+            []
+        else
+            (l cast ~AbstractList)::sort(less?) cast list<`a>
+        end,
+
+    /// Group: num
+    /// Mathematical constant pi (nearest value to pi expressable
+    /// as double precision floating point number).
+    pi = Math::PI,
+
+    /**
+     * Group: num
+     * Returns natural logaritm (base e) of the given value.
+     * Implemented using Math::log(value).
+     *
+     * Arguments:
+     * value - a positive number (NaN is returned for negative values)
+     */
+    ln a = Math::log(a),
+
+    /**
+     * Group: num
+     * Returns constant e raised to the given power.
+     * Implemented using Math::exp(power).
+     *
+     * Arguments:
+     * power - a numeric value
+     */
+    exp a = Math::exp(a),
+
+    /**
+     * Group: num
+     * Returns the trigonometric cosine of the given angle.
+     * Implemented using Math::cos(angle).
+     *
+     * Arguments:
+     * angle - an angle in radians
+     */
+    cos a = Math::cos(a),
+
+    /**
+     * Group: num
+     * Returns the trigonometric sine of the given angle.
+     * Implemented using Math::sin(angle).
+     *
+     * Arguments:
+     * angle - an angle in radians
+     */
+    sin a = Math::sin(a),
+
+    /**
+     * Group: num
+     * Returns the trigonometric tangent of the given angle.
+     * Implemented using Math::tan(angle).
+     *
+     * Arguments:
+     * angle - an angle in radians
+     */
+    tan a = Math::tan(a),
+
+    /**
+     * Group: num
+     * Returns the arc cosine of the given value in radians.
+     * The returned angle is in the range 0.0..pi.
+     * Implemented using Math::acos(value).
+     *
+     * Arguments:
+     * value - a numeric value
+     */
+    acos a = Math::acos(a),
+
+    /**
+     * Group: num
+     * Returns the arc sine of the given value in radians.
+     * The returned angle is in the range -pi/2..pi/2.
+     * Implemented using Math::asin(value).
+     *
+     * Arguments:
+     * value - a numeric value
+     */
+    asin a = Math::asin(a),
+
+    /**
+     * Group: num
+     * Returns the arc tangent of the given value in radians.
+     * The returned angle is in the range -pi/2..pi/2.
+     * Implemented using Math::atan(value).
+     *
+     * Arguments:
+     * value - a numeric value
+     */
+    atan a = Math::atan(a),
+
+    /**
+     * Group: num
+     * Returns the positive square root of the given value.
+     * Implemented using Math::sqrt(value).
+     *
+     * Arguments:
+     * value - a positive number or zero (NaN is returned for negative values)
+     */
+    sqrt a = Math::sqrt(a),
+
+    /**
+     * Group: num
+     * Returns the integer part of the given value.
+     *
+     * Arguments:
+     * value - a numeric value
+     *
+     * Notes:
+     * Current implementation expects that result fits into
+     * 64-bit signed integer (`Long::MIN_VALUE..Long::MAX_VALUE`).
+     */
+    int a is number -> number = (a as ~java.lang.Number)::longValue(),
+
+    /**
+     * Group: num
+     * Returns the closest integer to the given value.
+     * Implemented using Math::round(value).
+     *
+     * Arguments:
+     * value - a numeric value
+     *
+     * Notes:
+     * Current implementation expects that result fits into
+     * 64-bit signed integer (`Long::MIN_VALUE..Long::MAX_VALUE`).
+     */
+    round a is number -> number = Math::round(a),
+
+    /**
+     * Group: num
+     * Returns a pseudorandom integer value between 0 (inclusive) and
+     * the given limit (exclusive). All possible values are produced
+     * with approximately equal probability.
+     *
+     * Arguments:
+     * limit - the limit on the returned value (must be greater than zero)
+     */
+    randomInt = new RandomInt() cast number -> number,
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with all occurences of the needle
+     * substring replaced with replacement string in the given haystack string.
+     *
+     * Description:
+     * The needle and replacement strings are treated as literal substring,
+     * with no metacharacters. All strings represent UTF-16 code unit sequences
+     * (internally java.lang.String instances). All occurences of the needle
+     * subsequence starting from beginning of the string are replaced
+     * sequentially and the resulting string is returned.
+     *
+     * Arguments:
+     * needle      - a string to search
+     * replacement - a string to use as replacement
+     * haystack    - a original string to process
+     *
+     * Examples:
+     * : strReplace 'aba' '+' 'xabaabababax' == 'x++b+x'
+     */
+    strReplace needle replacement haystack
+            is string -> string -> string -> string =
+        Core::replace(needle cast ~String,
+                      replacement cast ~String,
+                      haystack cast ~String),
+
+    /**
+     * Group: str
+     * Returns the length (number of UTF-16 code units) of string.
+     *
+     * Arguments:
+     * string - an UTF-16 encoded string (internally stored as java.lang.String)
+     *
+     * Notes:
+     * The basic multilingual (first) plane of unicode characters are
+     * represented as single code units in UTF-16, therefore `strLength` returns
+     * the count of unicode characters for strings containing only those
+     * characters. The java.lang.String length method works in the same way,
+     * and compiler optimizes `strLength` applications into `String::length()` calls.
+     */
+    unbind strLength s = strLength s,
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with all lowercase letters translated
+     * to uppercase using the rules of the default locale.
+     *
+     * Arguments:
+     * string - a string value (internally stored as java.lang.String)
+     *
+     * Notes:
+     * Compiler optimizes `strUpper` applications into `String::toUpperCase()` calls.
+     */
+    unbind strUpper s = strUpper s,
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with all uppercase letters translated
+     * to lowercase using the rules of the default locale.
+     *
+     * Arguments:
+     * string - a string value (internally stored as java.lang.String)
+     *
+     * Notes:
+     * Compiler optimizes `strLower` applications into `String::toLowerCase()` calls.
+     */
+    unbind strLower s = strLower s,
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with leading and trailing whitespace
+     * removed.
+     *
+     * Arguments:
+     * string - a string value (internally stored as java.lang.String)
+     *
+     * Notes:
+     * Compiler optimizes `strTrim` applications into `String::trim()` calls.
+     * The argument instance is directly returned, if there is no whitespace
+     * to remove.
+     */
+    unbind strTrim s = strTrim s,
+
+    /**
+     * Group: str
+     * Returns the substring of given string, from code unit at start index
+     * until code unit at end index. The start and end indexes are 0-based.
+     *
+     * Arguments:
+     * string - an UTF-16 encoded string (internally stored as java.lang.String)
+     * start  - index of the code unit starting returned slice (inclusive)
+     * end    - index of the code unit ending returned slice (exclusive)
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if start or end index is negative or > to
+     *                             the length of string, or start index is
+     *                             is greater than the end index
+     *
+     * Notes:
+     * The basic multilingual (first) plane of unicode characters are
+     * represented as single code units in UTF-16.
+     * Compiler optimises `strSlice` applications into `String::substring()` calls.
+     */
+    unbind strSlice s start_ end_ = strSlice s start_ end_,
+
+    /**
+     * Group: str
+     * Returns the substring of given string, from code unit at start index
+     * until to the end of string.
+     * Same as `strSlice string start (strLength string)`.
+     *
+     * Arguments:
+     * string - an UTF-16 encoded string (internally stored as java.lang.String)
+     * start  - 0-based index of the code unit starting returned slice
+     *          (inclusive)
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if the start index is negative or greater
+     *                             than the length of string
+     *
+     * Notes:
+     * The basic multilingual (first) plane of unicode characters are
+     * represented as single code units in UTF-16.
+     * Compiler optimises `strRight` applications into `String::substring()` calls.
+     */
+    unbind strRight s pos = strRight s pos,
+
+    /**
+     * Group: str
+     * Returns true when the given string starts with the specified prefix
+     * (and false otherwise).
+     *
+     * Arguments:
+     * string - a string value to test
+     * prefix - the expected prefix string for the tested string value
+     *
+     * Notes:
+     * Compiler optimises `strStarts?` applications into
+     * `String::startsWith()` calls.
+     */
+    unbind strStarts? s start = strStarts? s start,
+
+    /**
+     * Group: str
+     * Returns true when the given string ends with the specified suffix
+     * (and false otherwise).
+     *
+     * Arguments:
+     * string - a string value to test
+     * suffix - the expected prefix suffix for the tested string value
+     *
+     * Notes:
+     * Compiler optimises `strEnds?` applications into `String::endsWith()` calls.
+     */
+    unbind strEnds? s end_ = strEnds? s end_,
+
+    /**
+     * Group: str
+     * Finds the start position of the first occurrence of the substring in
+     * the given string, that is not before the from index.
+     *
+     * Arguments:
+     * string    - the string to be searched
+     * substring - the substring to search
+     * from      - the search starts from this index
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if the from index is negative or greater
+     *                             than the length of string
+     *
+     * Notes:
+     * The strings are UTF-16 encoded code unit sequences (internally stored as
+     * java.lang.String) with 0-based indexing. Compiler optimises
+     * `strIndexOf` applications into `String::indexOf()` calls.
+     */
+    unbind strIndexOf haystack needle from = strIndexOf haystack needle from,
+
+    /**
+     * Group: str
+     * Finds the start position of the last occurrence of the substring in
+     * the given string, that is not after the from index.
+     *
+     * Arguments:
+     * string    - the string to be searched
+     * substring - the substring to search
+     * from      - the search starts from this index
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if the from index is negative or greater
+     *                             than the length of string
+     *
+     * Notes:
+     * The strings are UTF-16 encoded code unit sequences (internally stored as
+     * java.lang.String) with 0-based indexing. Compiler optimises
+     * `strLastIndexOf` applications into `String::lastIndexOf()` calls.
+     */
+    unbind strLastIndexOf haystack needle from =
+            strLastIndexOf haystack needle from,
+
+    /**
+     * Group: str
+     * Finds the start position of the last occurrence of the substring in
+     * the given string.
+     * Same as `strLastIndexOf string substring (strLength string)`.
+     *
+     * Arguments:
+     * string    - the string to be searched
+     * substring - the substring to search
+     *
+     * Notes:
+     * The strings are UTF-16 encoded code unit sequences (internally stored as
+     * java.lang.String) with 0-based indexing, and compiler optimises
+     * `strLastIndexOf` applications into `String::lastIndexOf()` calls.
+     */
+    unbind strLastIndexOf' haystack needle = strLastIndexOf' haystack needle,
+
+    /**
+     * Group: regex
+     * Splits the string into substrings separated by matches of the regex,
+     * and returns array of the resulting substrings.
+     *
+     * Arguments:
+     * regex  - string representing a regular expression
+     * string - string to split
+     *
+     * Description:
+     * The matches of the regex are used as delimiters, and the substrings
+     * not matching the regex are returned in array in the order they were
+     * in the initial string. Empty substrings before matches are included
+     * in the returned array. Matches at the end of the given string won't
+     * add empty strings to the result.
+     *
+     * The regex is compiled and matched using the java.util.regex
+     * implementation, and therefore uses the same (Perl regular expression
+     * compatible) syntax. The Ria compiler optimises usage of this function
+     * when a literal string is used as regex argument, so that the regex will
+     * be compiled only once into the java.util.regex.Pattern instance.
+     *
+     * Examples:
+     * : strSplit ';' ';a;foo;;;bar;;' == ["","a","foo","","","bar"]
+     */
+    unbind strSplit re = strSplit re,
+
+    /**
+     * Group: regex
+     * Returns a copy of the string, with each substring matching the regex
+     * substituded with the replacement string in the given haystack string.
+     *
+     * Arguments:
+     * regex       - string representing a regular expression
+     * replacement - a string to use as replacement
+     * haystack    - a original string to process
+     *
+     * Description:
+     * Matches of the given regex are searched sequentially from the beginning
+     * of haystack string and replaced with the given replacement string.
+     *
+     * The replacement string can contain dollar signs ($) followed by decimal
+     * number (like $1, $2 etc), these will be replaced with text matched by
+     * corresponding group in the regex. $0 will be replaced with whole
+     * matched substring. Backslashes in replacement string escape the
+     * following code unit as a literal code unit (all occurrences of $ and
+     * \ meant to be literal symbols must be escaped this way).
+     *
+     * The regex is compiled and matched using the java.util.regex
+     * implementation (Matcher::replaceAll() is used for substitution), and
+     * therefore uses the same (Perl regular expression compatible) syntax.
+     * The Ria compiler optimises usage of this function when literal string is
+     * used as regex argument, so that the regex will be compiled only once
+     * into the java.util.regex.Pattern instance. All strings represent
+     * UTF-16 code unit sequences (internally java.lang.String instances).
+     *
+     * Examples:
+     * : substAll 'a(b*)' '$1' 'an abacus' == 'n bcus'
+     */
+    unbind substAll re = substAll re,
+
+    /**
+     * Group: regex
+     * Generates a lazy list by searching matches of given regex in the string.
+     *
+     * Arguments:
+     * regex   - string representation of regular expression
+     * onMatch - function to apply to the captured groups from matches
+     * onText  - function to apply to the non-matching substrings
+     * string  - string where to search the given regex matches
+     *
+     * Description:
+     * When a match is found, the `onText` function is applied to the text
+     * between previous match (or start of the string for first match) and
+     * matched substring, if this text isn't zero-length. The `onMatch`
+     * function is applied to an array composed of captured groups in the
+     * `regex` (implicit capture of whole matched substring is given as 0th
+     * element in the capture group array). The `onText` function is also
+     * applied to the end of the string after last match found, if the last
+     * match ends before.
+     *
+     * The results of `onText` and `onMatch` applications are added to the
+     * resulting list in the same order as the corresponding substrings were
+     * in the processed string. This `regex` match searching and list
+     * construction is done lazily, as the returned list is consumed
+     * (so if you apply `matchAll` to long string containing many matches of
+     * the substring and use only head of the result, only the first match
+     * will be actually searched).
+     *
+     * The `regex` is compiled and matched using the java.util.regex
+     * implementation, and therefore uses the same (Perl regular expression
+     * compatible) syntax. The Ria compiler optimises usage of this function
+     * when a literal string is used as regex argument, so that the regex will
+     * be compiled only once into the java.util.regex.Pattern instance.
+     *
+     * Examples:
+     * : for (matchAll '\d+' M T '2012-08-23T04:11Z') println;
+     *
+     * Prints the following parts of this ISO 8601 date by matching
+     * number sequences:
+     * : M ["2012"]
+     * : T "-"
+     * : M ["08"]
+     * : T "-"
+     * : M ["23"]
+     * : T "T"
+     * : M ["04"]
+     * : T ":"
+     * : M ["11"]
+     * : T "Z"
+     */
+    unbind matchAll re = matchAll re,
+
+    /**
+     * Group: regex
+     * Returns a function that searches for a regex match in the given string.
+     *
+     * Arguments:
+     * regex  - string representing a regular expression
+     * string - string where to search the given regex match
+     *
+     * Description:
+     * The returned function attempts to find next substring that matches the
+     * regex pattern, when applied to the unit value (). It returns array of
+     * captured groups from the regex match (including the whole matched substring
+     * as zeroth array element), or empty array, if no match could be found.
+     *
+     * The regular expression is compiled and matched using the java.util.regex
+     * implementation, and therefore uses the same (Perl regular expression
+     * compatible) syntax. The Ria compiler optimises usage of this function
+     * when a literal string is used as regex argument, so that the regex will
+     * be compiled only once into the java.util.regex.Pattern instance.
+     *
+     * Examples:
+     * Repeated application of the returned function can be used to find all
+     * substrings matching the regex pattern in the given string:
+     * : printMatches matcher =
+     * :    (match = matcher ();
+     * :     if not empty? match then
+     * :         println match[0];
+     * :         printMatches matcher;
+     * :     end);
+     * : printMatches (like '\d+' '2012-08-23T04:11Z');
+     *
+     * This will print all numbers from the ISO 8601 date:
+     * : 2012
+     * : 08
+     * : 23
+     * : 04
+     * : 11
+     *
+     * The matches could be collected into list using the `collect` function:
+     * : matches = collect (like '\d+' '2012-08-23T04:11Z') () empty?);
+     * : println matches; // [["2012"], ["08"], ["23"], ["04"], ["11"]]
+     *
+     * The returned function can be applied right away,
+     * if only first match is needed:
+     * : date = '2012-08-23T04:11Z';
+     * : case like '(\d+):(\d+)' date () of
+     * : [_, hour, min]: println "Hour: ${hour}, minutes: ${min}";
+     * : _: println "No time found in the date string.";
+     * : end;
+     */
+    unbind like re = like re,
+
+    /**
+     * Group: str
+     * Returns one UTF-16 code unit (Java char) from the string at the given
+     * index.
+     *
+     * Arguments:
+     * string - an UTF-16 encoded string (internally stored as java.lang.String)
+     * index  - a 0-based index of the code unit
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if the index is negative or >= to the length
+     *                             of string
+     */
+    unbind strChar s pos = strChar s pos,
+
+    /**
+     * Group: str
+     * Returns the substring of given string, from the start of string
+     * until code unit at end index. Same as `strSlice string 0 end`.
+     *
+     * Arguments:
+     * string - an UTF-16 encoded string (internally stored as java.lang.String)
+     * end    - 0-based index of the code unit ending returned slice (exclusive)
+     *
+     * Notes:
+     * The basic multilingual (first) plane of unicode characters are
+     * represented as single code units in UTF-16.
+     *
+     * Exceptions:
+     * IndexOutOfBoundsException - if the end index is negative or greater
+     *                             than the length of string
+     */
+    strLeft s end_ = strSlice s 0 end_,
+
+    /**
+     * Group: str
+     * Returns the string prefix until the start of first occurrence of the
+     * specified substring in the given string (or undef_str, if the substring
+     * isn't part of the given string).
+     *
+     * Arguments:
+     * substring - the substring to search
+     * string    - the string to be searched
+     *
+     * Examples:
+     * : strLeftOf 'at' 'potatos' == 'pot'
+     */
+    strLeftOf subString s is string -> string -> string =
+        i = strIndexOf s subString 0;
+        if i < 0 then undef_str else strSlice s 0 i end,
+
+    /**
+     * Group: str
+     * Returns the string suffix starting from the end of last occurrence of
+     * the specified substring in the given string (or undef_str, if the
+     * substring isn't part of the given string).
+     *
+     * Arguments:
+     * substring - the substring to search
+     * string    - the string to be searched
+     *
+     * Examples:
+     * : strRightOf 'at' 'potatos' == 'os'
+     */
+    strRightOf subString s is string -> string -> string =
+        i = strLastIndexOf' s subString;
+        if i < 0 then undef_str else strRight s (i + strLength subString) end,
+
+    /**
+     * Group: str
+     * Joins string representations of list elements into a single string,
+     * with separator string insterted between each list element.
+     * The resulting string is returned.
+     *
+     * Arguments:
+     * separator - a string to be inserted between list elements
+     * list      - a list to be joined
+     *
+     * Examples:
+     * : strJoin '; ' [1..5] == '1; 2; 3; 4; 5'
+     *
+     * Notes:
+     * The string representations of list elements are idententical to those
+     * that would be returned by the `string` function.
+     * : strJoin separator (map string list) == strJoin separator list
+     */
+    strJoin sep list is string -> list?<`a> -> string =
+        if empty? list then
+            ""
+        else
+            var l = (list cast ~AbstractList)::next();
+            if nullptr? l then
+                "${head list}"
+            else
+                // use cast to not give null's for undef_str's
+                buf = new java.lang.StringBuffer(
+                            "${head list}" cast ~String);
+                if sep == '' then
+                    not nullptr? l loop
+                       (buf::append(l::first());
+                        l := l::next())
+                else
+                    not nullptr? l loop
+                       (buf::append(sep cast ~String)
+                           ::append(l::first());
+                        l := l::next())
+                end;
+                buf::toString()
+            end
+        end,
+
+    /**
+     * Group: str
+     * Returns string with padding added at the end, if the string length
+     * is shorter than the desired length. The padding is added as many times
+     * as required (but not more) to get result with length that is not
+     * shorter from the requested one. The original string is returned
+     * unmodified, if its length is greater or equal to the requested one.
+     *
+     * Arguments:
+     * padding - a padding string to append
+     * length  - desired result length
+     * string  - a string to be padded
+     *
+     * Examples:
+     * : strPad '.' 10 'test' == 'test......'
+     */
+    strPad pad n str is string -> number -> string -> string =
+        if strLength str >= n or pad == '' then
+            str
+        else
+            buf = new java.lang.StringBuffer(str cast ~String);
+            buf::length() < n loop buf::append(pad cast ~String);
+            buf::toString()
+        end,
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with first character translated to
+     * uppercase. The string is returned unmodified, if this is not possible.
+     *
+     * Arguments:
+     * string - a string value
+     */
+    strCapitalize str is string -> string =
+        Core::capitalize(str cast ~String),
+
+    /**
+     * Group: str
+     * Returns a copy of the string, with first character translated to
+     * lowercase. The string is returned unmodified, if this is not possible.
+     *
+     * Arguments:
+     * string - a string value
+     */
+    strUncapitalize str is string -> string =
+        Core::uncapitalize(str cast ~String),
+
+    /**
+     * Group: num
+     * Returns a hexadecimal string representation of
+     * the integer part of the number.
+     *
+     * Arguments:
+     * number - the number to format
+     *
+     * Notes:
+     * The following characters are used as digits:
+     * : 0123456789abcdef
+     */
+    hex number is number -> string =
+        (number cast ~RiaNum)::toString(16, 0),
+
+    /**
+     * Group: num
+     * Returns a string representation of the integer part of
+     * the number in the given base.
+     *
+     * Arguments:
+     * base - the base to use (must be in the range 2 to 36)
+     * number - the number to format
+     *
+     * Notes:
+     * The following characters are used as digits:
+     * : 0123456789abcdefghijklmnopqrstuvwxyz
+     *
+     * Exceptions:
+     * java.lang.IllegalArgumentException - Invalid base argument value
+     */
+    strOfInt base number is number -> number -> string =
+        if base < 2 or base > 36 then
+            throw new IllegalArgumentException("Invalid base ${base}")
+        end;
+        (number cast ~RiaNum)::toString(base, 0),
+
+   /**
+    * Group: string
+    * Parses properties string given in Java properties file format.
+    *
+    * Arguments:
+    * string - properties string to parse
+    *
+    */
+   parseProperties string =
+        p = new java.util.Properties();
+        p::load(new java.io.StringReader(string));
+        new Hash(p) cast hash<string, string>,
+
+    /**
+     * Group: hash
+     * Applies the function to each key-value pair in the given hash map,
+     * and returns a list of the values returned by these applications.
+     * The order of elements in the returned list is undefined.
+     *
+     * Arguments:
+     *  function - function to apply to the hash map key-value pairs
+     *  hash     - a hash map
+     *
+     * Examples:
+     * : mapHash (_ k v = "${k}:${v}") ['a':1,'b': 3,'c': 5]
+     * May have the following result:
+     * : ["b:3","c:5","a:1"] is list?<string>
+     */
+    mapHash f h is (`a -> `b -> `c) -> hash<`a, `b> -> list?<`c> =
+        a = new MutableList();
+        a::reserve((h cast ~Map)::size());
+        i = (h cast ~Map)::entrySet()::iterator();
+        i::hasNext() loop
+           (e = i::next() cast ~java.util.Map$Entry;
+            a::add(f (e::getKey() cast `a)
+                    (e::getValue() cast `b)));
+        a cast list?<`c>,
+
+    /**
+     * Group: hash
+     * Creates a new hash map populated with key-value pairs derived
+     * from the sequence elements by application of getKey and getValue
+     * functions.
+     *
+     * Arguments:
+     * getKey   - function to derive hash map key from the sequence element
+     * getValue - function to derive hash map value from the sequence element
+     * sequence - list or array to use for creating the hash map
+     *
+     * Description:
+     * The canonical implementation is following:
+     * : mapIntoHash getKey getValue sequence =
+     * :    (result = [:];
+     * :     for sequence do element:
+     * :         result[getKey element] := getValue element
+     * :     done;
+     * :     result);
+     */
+    mapIntoHash getKey getValue sequence =
+        result = [:];
+        for sequence do element:
+            result[getKey element] := getValue element
+        done;
+        result,
+
+    /**
+     * Group: hash
+     * Creates an identity hash map, where keys are compared by their
+     * object instance identies (like the `same?` function does).
+     *
+     * Arguments:
+     * () - an unit value
+     */
+    identityHash () is () -> hash<`a, `b> =
+        new CHash(CHash::IDENTITY, ()) cast hash<`a, `b>,
+
+    /**
+     * Group: hash
+     * Creates a concurrent hash map (which can be safely used by multiple
+     * threads without synchronizing).
+     *
+     * Arguments:
+     * () - an unit value
+     *
+     * Notes:
+     * Implementation uses java.util.concurrent.ConcurrentHashMap.
+     */
+    concurrentHash () is () -> hash<`a, `b> =
+        new CHash(CHash::CONCURRENT, ()) cast hash<`a, `b>,
+
+    /**
+     * Group: hash
+     * Creates a weak hash map, that automatically discards entries
+     * when the key values are garbage collected (and doesn't hold strong
+     * references to the key values).
+     *
+     * Arguments:
+     * () - an unit value
+     */
+    weakHash () is () -> hash<`a, `b> =
+        new CHash(CHash::WEAK, ()) cast hash<`a, `b>,
+
+    /**
+     * Group: hash
+     * Creates a hash map backed with some custom implementation
+     * (which instances are created by appling the given constructor).
+     *
+     * Arguments:
+     * constructor - a function creating the java.util.Map instance to be used
+     */
+    customHash cons is (() -> ~java.util.Map) -> hash<`a, `b> =
+        new CHash(CHash::CUSTOM, cons cast ~Fun) cast hash<`a, `b>,
+
+    /**
+     * Group: 1_collections
+     * Returns a new copy of the given collection.
+     *
+     * Arguments:
+     * collection - a list, array or hash map
+     */
+    copy h is `a -> `a =
+        if nullptr? h then
+            () as ~Object cast `a
+        else
+            (h is map<`a, `b> cast ~ria.lang.Collection)::copy() cast map<`a, `b>
+        end,
+
+    /**
+     * Group: zmisc
+     * Fail evaluation with given error message by throwing FailureException.
+     *
+     * Arguments:
+     *  message - error message used as exception description
+     *
+     * Exceptions:
+     *  FailureException - always.
+     */
+    failWith message =
+        throw new FailureException(message),
+
+    /**
+     * Group: 1_collections
+     * Deletes the index/key and it's associated value from the
+     * collection. Does nothing if the given key/index doesn't belong
+     * to the collection.
+     *
+     * Arguments:
+     * collection - array or hash map
+     * key - array index or hash map key
+     */
+    delete h k is map<`a, `b> -> `a -> () =
+        _ = (h cast ~ByKey)::remove(k),
+
+    /**
+     * Group: 1_collections
+     * Deletes from the collection all keys/indexes (together with their
+     * associated values) existing in the given keylist. Keylist
+     * elements that are not collection keys are ignored.
+     *
+     * Arguments:
+     * collection - array or hash map
+     * keylist    - list of indexes/keys to be removed from the collection
+     *
+     * Examples:
+     * : a = array ['a', 'b', 'c', 'd', 'e'];
+     * : deleteAll a [1, 3];
+     * : println a; // outputs ["a","c","e"]
+     */
+    deleteAll h ks is map<`a, `b> -> list?<`a> -> () =
+        _ = (h cast ~ria.lang.Collection)::removeAll(ks),
+
+    /**
+     * Group: hash
+     * Sets a given default value function for the hash map.
+     *
+     * Arguments:
+     * hash     - hash map
+     * function - default value function
+     *
+     * Description:
+     * If non-existing key is requested from the hash map (using []
+     * subscript operator or `at` function), the default value
+     * function is applied to the requested key, and the result of
+     * application will be returned as if it had been in the hash map.
+     *
+     * If the default value function is not set, the hash maps behave
+     * like having one that throws the NoSuchKeyException. Explicitly
+     * setting it using this (setHashDefault) function overrides this
+     * behaviour.
+     *
+     * Examples:
+     * Memoization can be implemented using setHashDefault:
+     * : fibs = [0: 0, 1: 1];
+     * : setHashDefault fibs do x:
+     * :     res = fibs[x - 1] + fibs[x - 2];
+     * :     fibs[x] := res;
+     * :     res
+     * : done;
+     * : println fibs[100]; // prints 354224848179261915075
+     *
+     * This example uses memoization to speed up the naive recursive
+     * fibonacci numbers calculation algorithm (although using a iterative
+     * algorithm would have been even more effective).
+     */
+    setHashDefault h f is hash<`a, `b> -> (`a -> `b) -> () =
+        (h cast ~ByKey)::setDefault(f),
+
+    /**
+     * Group: hash
+     * Removes all entries from the hash map, leaving it empty.
+     *
+     * Arguments:
+     * map - the hash map to clear
+     */
+    clearHash h is hash<`a, `b> -> () =
+        (h cast ~Map)::clear(),
+
+    /**
+     * Group: hash
+     * Inserts all source map entries to the destination hash map.
+     * Entries with matching key in both maps will be replaced in
+     * the destination (with ones from the source).
+     *
+     * Arguments:
+     * destination - hash map where to insert the source entries
+     * source      - hash map where to take the entries
+     *
+     * Description:
+     * The `insertHash` function could be implemented with following code:
+     * : insertHash destination source =
+     * :     forHash source do key value:
+     * :         destination[key] := value
+     * :     done;
+     *
+     * The library implementation uses internally java.util.Map::putAll().
+     */
+    insertHash h h' is hash<`a, `b> -> hash<`a, `b> -> () =
+        _ = (h cast ~Map)::putAll(h' cast ~Map),
+
+    /**
+     * Group: array
+     * Preallocates the array storage for at least the given element count,
+     * so pushing elements later would not cause reallocating and coping
+     * the internal storage. Does nothing, if the storage already has
+     * capacity for the required number of elements.
+     *
+     * Arguments:
+     * array - array where to set the capacity
+     * count - the maximum number of total elements that the array should
+     *         be able to store without further reallocations
+     */
+    setArrayCapacity a n is array<`a> -> number -> () =
+        (a cast ~MutableList)::reserve(n),
+
+    /**
+     * Group: array
+     * Removes all elements from the array, leaving it empty.
+     *
+     * Arguments:
+     * array - the array to clear
+     */
+    clearArray a is array<`a> -> () =
+        (a cast ~MutableList)::clear(),
+
+    /**
+     * Group: array
+     * Shifts the first value off from the array and returns it, moving all
+     * other elements towards the start.
+     *
+     * Arguments:
+     * array - an array to be shifted
+     *
+     * Exceptions:
+     * ria.lang.EmptyArrayException - if the array is empty
+     *
+     * Notes:
+     * The contents of array is not moved internally. Instead of it the
+     * first element is just hidden. This makes the `shift` operation O(1) fast,
+     * but leaves the shifted entries internally used (at least until the
+     * internal storage is resized, for example by `push` having insufficient
+     * space available).
+     */
+    shift a is array<`a> -> `a =
+        (a cast ~MutableList)::shift() cast `a,
+
+    /**
+     * Group: array
+     * Pops and returns the last value from the array, like removing the
+     * top element from stack.
+     *
+     * Arguments:
+     * array - an array to be popped
+     *
+     * Exceptions:
+     * ria.lang.EmptyArrayException - if the array is empty
+     */
+    pop a is array<`a> -> `a =
+        (a cast ~MutableList)::pop() cast `a,
+
+    /**
+     * Group: array
+     * Pushes a value into the array behind last element, increasing the
+     * array size by one. Together with the `pop` function it allows
+     * treating the array like a stack.
+     *
+     * Arguments:
+     * array - an array where to push the value
+     * value - value to be added to the array
+     */
+    push a v is array<`a> -> `a -> () =
+        (a cast ~MutableList)::add(v),
+
+    /**
+     * Group: array
+     * Returns a copy of slice of the given array, from start index
+     * to the end index.
+     *
+     * Arguments:
+     * array - an array to be used
+     * start - the slice start index (inclusive) in the array
+     * end   - the slice end index (exclusive) in the array
+     */
+    slice a start_ end_ is array<`a> -> number -> number -> array<`a> =
+        (a cast ~MutableList)::copy(start_, end_) cast array<`a>,
+
+    /**
+     * Group: list
+     * Collects values from applications of the generator function to the
+     * given argument, until application of the end predicate to generated
+     * value yields true. The collected values are returned as a list.
+     *
+     * Arguments:
+     * generator - a function returning a new value on each application
+     * argument  - argument to give to the generator function
+     * end       - a predicate function, which on application to a generated
+     *             value returns true, if no more values should be collected
+     *
+     * Examples:
+     * Collect lines from standard input strictly to list:
+     * : input = collect readln () ((not) . defined?);
+     *
+     * Collect words from string using like pattern match function:
+     * : str = 'A lot of weird functions.';
+     * : words = collect (like '\w+' str) () empty? |> map head;
+     * : println words; // ["A","lot","of","weird","functions"]
+     */
+    collect f a endPred is (`a -> `b) -> `a -> (`b -> boolean) -> list<`b> = (
+        l = new MutableList();
+        (v = f a; not endPred v and (l::add(v); true)) loop;
+        if l::isEmpty() then
+            []
+        else
+            l cast list<`a>
+        end),
+
+    /**
+     * Group: list
+     * Returns a lazy list containing all those sequence elements,
+     * for which the predicate function returns true.
+     *
+     * Arguments:
+     * predicate - function that returns true or false for sequence element
+     * sequence - list or array to filter
+     *
+     * Examples:
+     * : filter (_ v = v % 2 == 1) [1..10] // gives odd numbers [1, 3, 5, 7, 9]
+     *
+     * Notes:
+     * The resulting list is created lazily, when consumed, and the sequence
+     * given as argument is lazily consumed as needed for producing the result
+     * list. The order of sequence elements is preserved in the result.
+     */
+    filter f l is (`a -> boolean) -> list?<`a> -> list<`a> =
+        if empty? l then
+            []
+        else
+            FilterList::filter(l, f) cast list<`a>
+        end,
+
+    /**
+     * Group: list
+     * Returns a lazy list containing values without variant tags from the
+     * Some elements in the given sequence.
+     *
+     * Arguments:
+     * sequence - list or array of Some or None variants
+     *
+     * Examples:
+     * : unwrap [Some 3, None (), Some 1, Some 4, None ()] // gives [3, 1, 4]
+     *
+     * Notes:
+     * The resulting list is created lazily, when consumed, and the sequence
+     * given as argument is lazily consumed as needed for producing the result
+     * list. The order of sequence elements is preserved in the result.
+     */
+    unwrap l is list?<maybe<`a>> -> list<`a> =
+        if empty? l then
+            []
+        else
+            Unwrap::filter(l) cast list<`a>
+        end,
+
+    /**
+     * Group: list
+     * Returns a lazy list where each element is result of appling the function
+     * to corresponding elements in the given first and second sequences.
+     * Excess elements at the end of longer sequence will be ignored.
+     *
+     * Arguments:
+     *  function - function applied to the sequence elements
+     *  first    - first list or array to be used
+     *  second   - second list or array to be used
+     *
+     * Examples:
+     * Coupled with the `pair` function, two lists could be merged into single
+     * one containing corresponding pairs:
+     * : pairs = map2 pair [1..3] ['apple', 'orange', 'cat', 'rock'];
+     * : for pairs println;
+     *
+     * The second line (`for pairs println;`) prints the pairs created
+     * by the `pair` function used with `map2`:
+     * : {fst=1, snd="apple"}
+     * : {fst=2, snd="orange"}
+     * : {fst=3, snd="cat"}
+     *
+     * Notes:
+     * The resulting list is created lazily, when consumed, and the sequence
+     * given as argument is lazily consumed as needed for producing the result
+     * list.
+     */
+    map2 f a b is (`a -> `b -> `c) -> list?<`a> -> list?<`b> -> list<`c> =
+        if empty? a or empty? b then
+            []
+        else
+            new Map2List(f, a, b) cast list<`c>
+        end,
+
+    /**
+     * Group: list
+     * Returns a list consisting of the first list elements
+     * in reverse order, and with the second list appended as a tail
+     * (without coping it).
+     *
+     * Arguments:
+     * first  - list or array to be reversed (must be finite)
+     * second - list to be appended to the reversed first sequence
+     *
+     * Examples:
+     * : revAppend [1..3] [4..6] == [3, 2, 1, 4, 5, 6]
+     */
+    revAppend a b is list?<`a> -> list<`a> -> list<`a> =
+        if empty? a then
+            b
+        else
+            var a = a cast ~AbstractIterator;
+            var res = b;
+            not nullptr? a loop
+(                res := (a::first() cast `a) :+ res;
+                a := a::next()
+            );
+            res
+        end,
+
+    /**
+     * Group: list
+     * Returns a list containing the sequence elements in reverse order.
+     *
+     * Arguments:
+     * sequence - list or array to be reversed (must be finite)
+     *
+     * Examples:
+     * : reverse [1..5] == [5, 4, 3, 2, 1]
+     *
+     * Notes:
+     * Using reverse on range is constant-time operation, as a special
+     * reverse range is returned (instead of creating a list containing
+     * all the range elements).
+     */
+    reverse l is list?<`a> -> list<`a> =
+        if nullptr? l then
+            []
+        else
+            (l cast ~AbstractList)::reverse() cast list<`a>
+        end,
+
+    /**
+     * Group: zmisc
+     * Encodes list of bytes as BASE64 string and returns the result.
+     *
+     * Arguments:
+     * bytes - bytes to encode
+     */
+    base64Encode bytes is list<number> -> string =
+        bytes = bytes as ~byte[];
+        Core::b64enc(bytes, length bytes),
+
+    /**
+     * Group: zmisc
+     * Decodes BASE64 encoded data into byte list and returns the result.
+     *
+     * Arguments:
+     * data - BASE64 encoded data
+     */
+    base64Decode data is string -> list<number> =
+        Core::b64dec(data cast ~String) cast list<number>,
+
+    /**
+     * Group: zmisc
+     * Provides a return function for a block.
+     *
+     * Arguments:
+     * block - a function to apply
+     *
+     * Description:
+     * Creates a return function and applies the given block to it.
+     * When the return function is applied to some value, it causes the
+     * withExit application to return with this value (stopping the block
+     * execution). The return function may be applied only during the
+     * withExit application. If applied later, an IllegalStateException
+     * is thrown, with message indicating an exit out of scope error.
+     *
+     * Examples:
+     * The `withExit` function can be useful, when early return from some
+     * code is desired.
+     * : processItems l =
+     * :     withExit do return:
+     * :         for l do v:
+     * :             if not process v then
+     * :                 return (Bad v)
+     * :             end
+     * :         done;
+     * :         Ok ()
+     * :     done;
+     *
+     * Notes:
+     * The withExit return works internally by throwing and catching a special
+     * Error instance, that for efficiency is constructed without stack trace.
+     *
+     * Be careful with lazy lists, for example:
+     * : withExit do e: 1 :. $(e []) done
+     * fails with exit out of scope error, when the resulting lazy list is used.
+     */
+    withExit f is ((`a -> `b) -> `a) -> `a =
+        EscapeFun::with(f) cast `a,
+
+    /**
+     * Group: zmisc
+     * Creates a structure with writable property field (`value`), that
+     * acts like being an independent instance for each thread accessing it.
+     *
+     * Arguments:
+     * initial - function returning initial value for
+     *           the structures `value` field (when applied to ())
+     *
+     * Description:
+     * The returned structure has a property field named `value`.
+     * Reading the field gives the latest value assigned to it by the same
+     * thread (or the result of appling `initial` argument that was given to
+     * the `threadLocal` function, if the reading thread has never assigned
+     * another value to the field). Assigning a new value to the field changes
+     * it only for the assigning thread.
+     *
+     * The value associated with thread can be removed by calling the `.wipe`
+     * function field from the structure. Accessing the value field after that
+     * causes new application of the `initial` function.
+     *
+     * Notes:
+     * Internal implementation uses the java.lang.ThreadLocal class.
+     */
+    threadLocal initialValue is (() -> `_a) ->
+            { var value is `_a, wipe is () -> () } =
+        class Local extends java.lang.ThreadLocal
+            Object initialValue() initialValue ()
+        end;
+        let tl = new Local();
+        {
+            /// The value in thread-local variable.
+            get value () = tl::get() cast `_a,
+            set value v  = tl::set(v),
+
+            /// Clears the thread-local variable.
+            get wipe () () = tl::remove()
+        },
+
+    /**
+     * Group: zmisc
+     *
+     * Creates a new thread-safe atomic reference with the initial value set.
+     *
+     * Arguments:
+     * initial - the initial value for the reference structure `value` field
+     */
+    atomic initialValue is `a -> {
+            // The current value in this atomic reference.
+            var value is `a,
+
+            compareAndSet is `a -> `a -> boolean,
+
+            swap is `a -> `a
+        } = new Atomic(initialValue cast ~Object) cast `a,
+
+    /**
+     * Group: zmisc
+     * Returns as a formatted string the exception message and stack trace.
+     *
+     * Arguments:
+     * exception - an exception to format
+     *
+     * Description:
+     * The exception is formatted using the exception::printStackTrace(writer)
+     * method. On most JVM library implementations this results in
+     * a string separated into multiple lines by the "\n" line feed symbol,
+     * with first line containing the exception name and message, and rest
+     * being method and source file names from the call stack that was active
+     * when the Throwable instance was created.
+     *
+     * Examples:
+     * : java -jar ria.jar -e "stackTraceString new Exception('TEST')"
+     * : java.lang.Exception: TEST
+     * :         at code.apply(<>:1)
+     * :         at ria.lang.compiler.eval._1(eval.ria:85)
+     * :         at ria.lang.compiler.eval.execClass(eval.ria:63)
+     * :         at ria.lang.compiler.eval$evaluateCode$._0(eval.ria:353)
+     * :         at ria.lang.compiler.eval$evaluateCode$.apply(eval.ria:330)
+     * :         at ria.lang.Fun2_.apply(Unknown Source)
+     * :         at ria.lang.compiler.ria.main(ria.ria:193)
+     */
+    stackTraceString ex is ~java.lang.Throwable -> string =
+        sw = new java.io.StringWriter();
+        ex::printStackTrace(new java.io.PrintWriter(sw));
+        sw::toString(),
+
+    /**
+     * Group: zmisc
+     * String constant for the UTF-8 charset ("UTF-8").
+     */
+    utf8 = "UTF-8",
+    /**
+     * Group: zmisc
+     * String constant for the UTF-16 charset ("UTF-16").
+     */
+    utf16 = "UTF-16",
+
+    /**
+     * Group: zmisc
+     * Ria version string.
+     *
+     * Notes:
+     * Don't try simple string comparison on it.
+     * Convert it to a number list with something like:
+     * : map number (strSplit '\D+' riaVersion) >= [0,9]
+     */
+    riaVersion = "0.7.0"
+}

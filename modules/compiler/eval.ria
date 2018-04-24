@@ -1,0 +1,538 @@
+module ria.lang.compiler.eval;
+
+import java.lang: Class, ClassLoader, Thread, Throwable;
+import ria.lang.Core;
+import java.security.Permission;
+import java.io.File;
+
+load ria.lang.compiler.showtype;
+
+typedef typedef_description = {
+    /// The name of the new type alias defined by the typedef.
+    name is string,
+    /// Type assigned to the type alias.
+    type is type,
+    /// Type parameter names.
+    param is list<string>
+};
+
+typedef module_description = {
+    /// Description of the module from the top doc-string.
+    doc is string,
+    /// Module name (like `ria.lang.compiler.eval`).
+    name is string,
+    /// Module type signature.
+    type is type,
+    /// List of typedefs exported by the module.
+    typedefs is list<typedef_description>,
+    /// Compilation was skipped, type don't have doc-strings.
+    skipped is boolean
+};
+
+typedef module_documentation = {
+    /// Directory where to write the generated HTML files.
+    ///
+    /// The directory is created if it doesn't exist already.
+    .directory is `a,
+    /// List of module descriptions.
+    .modules is `b,
+    /// Error handler (takes error message as argument).
+    .error is `c
+};
+
+let execClass argv eval loader mainClass
+        is array<string> -> boolean
+           -> ~ClassLoader -> string -> ~Object = (
+    let c = Class::forName(strReplace '/' '.' mainClass, true, loader);
+    let old_argv = Core::ARGV::get();
+    let th = Thread::currentThread();
+    let old_cl = th::getContextClassLoader();
+    th::setContextClassLoader(loader);
+    try
+        if eval then
+            Core::ARGV::set(argv);
+            let f = c::newInstance() cast () -> `a;
+            f ()
+        else
+            let aa = new Object[1];
+            aa[0] := argv is array<string> as ~String[] as ~Object;
+            c::getMethod("main", [classOf String[]])::invoke((), aa)
+        end
+    finally
+        Core::ARGV::set(old_argv);
+        th::setContextClassLoader(old_cl)
+    end
+);
+
+let createCtx genericOpt cl = (
+    var warn = $() is ~CompileException -> ();
+    var classPath = [] is list<string>;
+    var flags = 0;
+
+    let context = new Compiler();
+    let java = array [];
+
+    for genericOpt
+       $case of
+
+        /// Set destination directory, where to write class files.
+        /// Disables execution on evaluateCode as side effect.
+        To dir:
+            dir = if dir != '' then "${dir}/" else '' end;
+            if nullptr? context::writer and dir != '' then
+                push java '-d';
+                push java dir;
+            end;
+            context::writer := new FileWriter(dir) as ~ria.lang.Fun;
+            context::depDestDir := dir;
+
+        /// Set custom source reader function.
+        SourceReader f:
+            context::customReader :=
+                f is {
+                    /// Source file name (may include directories).
+                    /// The reader function should assign a canonical path
+                    /// of the source file to it.
+                    var .name is string,
+                    /// Parent directory from source path entry.
+                    /// Can be undef_str, when not searched
+                    /// from the source path.
+                    .parent is string
+                } -> string as ~ria.lang.Fun;
+
+        /// Set custom class writing function.
+        ClassWriter writer:
+            context::writer := writer is string -> ~byte[] -> () as ~ria.lang.Fun;
+
+        /// Set warning handler (~CompileException -> ()).
+        /// Called once for each warning.
+        /// Hint: use Warn (push somewhere).
+        Warn action: warn := action;
+
+        /// Give class path to search for compiled libraries.
+        ClassPath path: classPath := classPath ++ path;
+
+        /// Set modules that are preloaded. Default is ria.lang.std and io.
+        Preload p: context::preload := p is list?<string> as ~String[];
+
+        /// Print parse tree to stdout.
+        /// For debugging the compiler.
+        ParseTree (): flags := flags b_or Compiler::CF_PRINT_PARSE_TREE;
+
+        /// Disable importing foreign classes. Useful when sandboxing.
+        NoImport ():
+            context::globalFlags := context::globalFlags b_or Compiler::GF_NO_IMPORT;
+        end;
+
+    context::classPath := new ClassFinder(classPath, context::depDestDir);
+    if nullptr? context::writer then
+        var cl = cl;
+        if nullptr? cl then
+            cl := Thread::currentThread()::getContextClassLoader();
+            if not empty? classPath then
+                let urls = array [];
+                for classPath do p:
+                    push urls new File(p)::toURI()::toURL()
+                done;
+                cl := new java.net.URLClassLoader(urls, cl) as ~ClassLoader
+            end
+        end;
+        context::writer := new RiaLoader(cl) as ~ria.lang.Fun;
+    end;
+    {warn, context, flags, java}
+);
+
+let nullTypeAction = const ();
+
+let moduleDoc m is ~ModuleType -> module_description = {
+    let doc = m::topDoc,
+    let name = strReplace '/' '.' m::name,
+    let type = m::riaType() cast type,
+
+    typedefs =
+        typedefs = array [];
+        let addDef name def scope = (
+            let param = array [];
+            let type = TypeDescription::typeDef(
+                def is ~CType[],
+                param cast ~ria.lang.MutableList,
+                scope is ~TypePattern);
+            push typedefs {
+                name = string name,
+                type = type cast type,
+                param = list param
+            }
+        );
+        var scope = m::typeScope;
+        if nullptr? scope then
+            let i = m::typeDefs::entrySet()::iterator();
+            i::hasNext() loop (
+                let e = i::next() cast ~java.util.Map$Entry;
+                addDef e::getKey()
+                    (e::getValue() cast ~CType[])
+                    (() as ~TypePattern)
+            );
+            sortBy (on (<) (.name)) typedefs
+        else
+            let defined = new java.util.HashMap(m::typeDefs);
+            let count = m::typeDefs::size();
+            not nullptr? scope and length typedefs < count loop (
+                typeDef = scope::typedef(false);
+                if not nullptr? typeDef and not nullptr? defined::remove(scope::name) then
+                    addDef scope::name
+                        typeDef TypePattern::toPattern(scope::outer,true)
+                end;
+                scope := scope::outer
+            );
+            reverse typedefs
+        end,
+
+    skipped = m::fromClass,
+};
+
+/**
+ * Compiles a set of Ria (and possibly Java) source files into
+ * JVM class files. Module dependencies will be automatically compiled,
+ * if possible.
+ *
+ * Arguments:
+ * genericOptions - generic compile options
+ * options        - additional options
+ * source         - list of the source files to compile
+ *
+ * Description:
+ * Compiles the source files into class files. Ria sources (identified
+ * by the `.ria` suffix) will be compiled directly. Java sources
+ * (with `.java` suffix) will be compiled by invoking the javac compiler
+ * class com.sun.tools.javac.Main (`lib/tools.jar` is loaded from the
+ * JDK home, if the class is not already available).
+ *
+ * On mixed compiles a three-way sequence is done, by partially parsing
+ * the Java source files first to obtain the class types, compiling
+ * Ria sources and finally compiling Java sources using javac.
+ *
+ * Examples:
+ * : load ria.lang.compiler.eval;
+ * :
+ * : compileFiles [To 'target'] [] ['hello.ria'];
+ * A `hello.class` will be generated to the target directory,
+ * given that you have the following `hello.ria` file:
+ * : println 'Hello world!';
+ *
+ * The compiled code can be executed with the usual `java` command:
+ * : java -cp ria.jar:target hello
+ * 
+ * The `ria.jar` is required here for
+ * the Ria standard library.
+ */
+let compileFiles genericOpt options files = (
+    var exec = false;
+    var execArg = array [];
+    var typeAction = nullTypeAction;
+    var mainClass = '';
+
+    let param = createCtx genericOpt (() as ~ClassLoader);
+    {context} = param;
+
+    let sourcePath = array [];
+    for options
+       $case of
+
+        /// Get module types. The action (`module_description -> ()`)
+        /// is called after each module file given for compilation. 
+        Type action:
+            typeAction := action;
+            context::globalFlags := context::globalFlags b_or Compiler::GF_DOC;
+
+        /// Execute main after compilation of the sources.
+        /// The _argv will be set to the arg parameter.
+        Exec arg:
+            if not context::writer instanceof RiaLoader then
+                throw new CompileException(0, 0,
+                    "To and Exec options together are not supported")
+            end;
+            exec := true;
+            execArg := arg;
+
+        /// Add source directory to source path (where compiler searches for uncompiled dependencies).
+        SourceDir dir:
+            push sourcePath dir;
+
+        /// Option to give to the javac, when .java files were in source file set.
+        JavaOption option:
+            push param.java option;
+        end;
+
+    context::setSourcePath(sourcePath);
+    if not same? typeAction nullTypeAction and not exec
+            and context::writer instanceof RiaLoader then
+        context::writer := () as ~ria.lang.Fun;
+        Compiler::currentCompiler::set(context);
+        for (list files) do src:
+            typeAction (moduleDoc RiaTypeVisitor::getType(context, (), src, true))
+        done
+    else
+        try
+            var flags = param.flags;
+            if exec and length files == 1 then
+                flags := flags b_or Compiler::CF_EXPECT_PROGRAM
+            end;
+            mainClass := context::compileAll(sort files, flags, param.java)
+        finally
+            context::enumWarns(param.warn)
+        end;
+        if not same? typeAction nullTypeAction then
+            let i = context::types::values()::iterator();
+            i::hasNext() loop (
+                t = i::next() cast ~ModuleType;
+                if t::hasSource then
+                    typeAction (moduleDoc t)
+                end
+            )
+        end
+    end;
+    if exec then
+        if mainClass != '' then
+            classLoader = (context::writer cast ~RiaLoader)::mem;
+            _ = execClass execArg false classLoader mainClass;
+        elif not defined? mainClass then
+            throw new CompileException(0, 0, "Cannot run a module")
+        end
+    end
+);
+
+/**
+ * Evaluates Ria expression.
+ *
+ * Arguments:
+ * genericOptions    - generic compile options
+ * evaluationOptions - options about evaluating
+ * expression        - string containing the Ria code
+ *
+ * Description:
+ * Compiles the expression in memory to JVM class(es),
+ * and then lets the JVM load and execute the bytecode
+ * from these generated classes.
+ *
+ * Examples:
+ * Run a chunk of code, ignoring the result value:
+ * : load ria.lang.compiler.eval;
+ * :
+ * : _ = evaluateCode [] [] 'println "Hello world"';
+ *
+ * Evaluate expression with specific binding environment:
+ * : // Creates the environment
+ * : env = evaluateCode [];
+ * :
+ * : // bind variable in the environment
+ * : case env [Bind ()] 'x = 40' of
+ * : {result = Result _}: (); // OK
+ * : {str}: failWith str;
+ * : end;
+ * :
+ * : // use the binding 
+ * : res = env [] 'x + 2';
+ * : println res;
+ *
+ * The last println should print the following line:
+ * : {bindings=[], result=Result 42, str="42 is number\n", type=Simple "number"}
+ */
+let evaluateCode genericOpt = (
+    var evalEnv = () as ~RiaEval;
+    let mainClass = "code";
+    var cl = () as ~ClassLoader;
+    do options code:
+        let bindingVars = array [];
+        let sourcePath = array [];
+        var type = Simple '()';
+        var exec = true;
+        var bind = false;
+        var argv = array [];
+        var sourceName = undef_str;
+        let param = createCtx genericOpt cl;
+        {context} = param;
+        var flags = param.flags b_or Compiler::CF_EVAL
+                                b_or Compiler::CF_EVAL_RESOLVE;
+        if context::writer instanceof RiaLoader then
+            cl := (context::writer cast ~RiaLoader)::mem::getParent()
+        end;
+
+        for options
+           $case of
+            /// Store top-level bindings in the evaluation environment.
+            ///
+            /// Allows the bindings to be accessed by later evaluations with
+            /// the same context.
+            Bind (): bind := true;
+
+            /// Set _argv to given parameter during execution.
+            Exec a: argv := a;
+
+            /// Don't execute the code actually, only compile.
+            /// Useful, if you just want to get the type of expression.
+            NoExec (): exec := false;
+
+            /// Source "filename"
+            Source name: sourceName := name;
+
+            /// Source "folder/folder"
+            /// Adds the directory to the list of paths checked for source files
+            SourceDir dir: push sourcePath dir;
+            end;
+
+        typeOf? = code =~ '\Wis$';
+
+        code = if typeOf? then
+                   bind := false;
+                   exec := false;
+                   "throw (() as ~Exception) is\n${strLeft code (strLength code - 2)}"
+               else
+                   code
+               end;
+
+        if bind then
+            flags := flags b_or Compiler::CF_EVAL_STORE;
+        end;
+
+        if nullptr? evalEnv then
+            evalEnv := new RiaEval()
+        end;
+
+        let bindings = evalEnv::bindings;
+        var bindBarrier = bindings::size();
+
+        let oldContext = RiaEval::set(evalEnv);
+
+        /// The result of evaluation.
+        let result =
+            try
+                compileErr =
+                    try
+                        context::setSourcePath(sourcePath);
+                        t = context::compile(sourceName, code, flags);
+                        type := if typeOf? then
+                                    TypeDescription::riaType(t::type, (), ())
+                                else
+                                    t::riaType()
+                                end cast type;
+                        () as ~CompileException
+                    catch CompileException ex:
+                        ex
+                    finally
+                        context::enumWarns(param.warn)
+                    end;
+                if not nullptr? compileErr then
+                    CompileException compileErr
+                elif exec and context::writer instanceof RiaLoader then
+                    val = Result (execClass argv true
+                                            (context::writer cast ~RiaLoader)::mem
+                                            mainClass);
+                    bindBarrier < bindings::size() loop
+                       (push bindingVars (bindings::get(bindBarrier)
+                                            cast ~RiaEval$Binding);
+                        bindBarrier := bindBarrier + 1);
+                    val
+                else
+                    Result (() as ~Object)
+                end
+            catch java.lang.VirtualMachineError ex:
+                // other virtualmachine errors will be rethrown
+                // (including OutOfMemoryError)
+                if ex instanceof java.lang.StackOverflowError then
+                    Exception (ex as ~Throwable)
+                else
+                    throw ex
+                end
+            catch java.lang.ThreadDeath ex:
+                throw ex // honor thread death also
+            catch Throwable ex:
+                Exception ex
+            finally
+                RiaEval::set(oldContext)
+            end;
+
+        let bindings () = (
+            let res = array [];
+            for (list bindingVars) do binding:
+                if not binding::isImport then
+                    let t = binding::type;
+                    push res "${if binding::mutable then "var " else "" end}\
+                             "${binding::name} is ${t} = \
+                             "${if t::deref()::type == RiaType::UNIT then
+                                    "()"
+                                elif nullptr? binding::value then
+                                    "<undef>"
+                                else
+                                    Core::show(binding::val())
+                                end}"
+                end
+            done;
+            res
+        );
+
+        {
+            /// The inferred type of the evaluated expression.
+            type = type, result,
+            
+            /// List of new bindings created in
+            /// the environment during evaluation.
+            ///
+            /// The Ria syntax "name is type = value" is used.
+            get bindings () = list (bindings ()),
+
+            /// The result of evaluation formatted as string, like the Ria
+            /// REPL would print it (actually Ria REPL uses this getter).
+            get str () =
+                res = bindings ();
+                case result of
+                Exception ex:
+                    push res (stackTraceString ex);
+                CompileException ex:
+                    push res (ex is ~CompileException)::getMessage();
+                Result val:
+                    if typeOf? then
+                        push res (showType [] '' type)
+                    elif type != Simple "()" then
+                        s = try
+                                Core::show(val)
+                            catch Exception ex:
+                                stackTraceString ex
+                            end;
+                        push res "${s} is ${showType [] '' type}"
+                    end
+                end;
+                strJoin '' (map (^ "\n") res),
+        }
+    done
+);
+
+/**
+ * Generates HTML documentation for the given set of module descriptions.
+ *
+ * Examples:
+ * The module descriptions can be obtained using the `compileFiles`
+ * function with `Type` option.
+ * : load ria.lang.compiler.eval;
+ * :
+ * : modules = array [];
+ * : compileFiles [] [Type (push modules)] ['modules/core/xml.ria'];
+ * : generateDocs {directory = 'doctest', modules, error = failWith};
+ *
+ * This should generate the documentation HTML into directory named `doctest`
+ * (given that the `modules/core/xml.ria` module source file can be found).
+ */
+let generateDocs {directory, modules, error} is module_documentation -> () = (
+    cl = classOf RiaEval::getClassLoader();
+    context = evaluateCode [ClassWriter (new RiaLoader(cl) cast string -> ~byte[] -> ())];
+
+    let documenter = load ria.lang.compiler.doc;
+    createPath directory;
+
+    // Process each module
+    for (modules is list?<module_description>) (documenter.moduleDoc directory);
+    // Now create the index
+    documenter.docIndex directory;
+);
+
+// Return value
+{ compileFiles, evaluateCode, generateDocs }

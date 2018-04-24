@@ -1,0 +1,501 @@
+program test;
+
+expectCompileError testCode =
+   (load ria.lang.compiler.eval;
+    case evaluateCode [] [] testCode of
+    {result = CompileException _}: true;
+    {str}: println str; false;
+    end);
+
+received = array [];
+addReceived v =
+    push received v;
+
+h = [0.5e: true, 33.2: false];
+trueTests = [
+'id': $(id true),
+'const': const true,
+'ignore': $(_ = false; true),
+'at' : $(at h 0.5 and not (at h 33.2e)),
+'not': $(not false and (not true) == false),
+'and': $(true and not (false and true)),
+'or' : $(not (false or false) and (false or true)),
+'in': $(not (0 in h) and 0.5 in h and 33.2 in h),
+'==': $(not (0 == -1) and (1 == 1)),
+'!=': $(1 != 2 and not (0 != 0)),
+'<' : $(1 < 2 and not (1 < 1) and not (1 < 0)),
+'<=': $(1 <= 2 and 1 <= 1 and not (1 < 0)),
+'>' : $(1 > 0 and not (0 > 0) and not (-2 > -1)),
+'>=': $(22 >= 21.9 and 22 >= 22 and not (22 >= 22.1)),
+'*' : $(2 + 3 == 5),
+'-' : $(2 - 3 == -1),
+'*' : $(7 * 5 == 35),
+'/' : $(42 / 2 == 21),
+'%' : $(7 % 5 == 2),
+'.' : $(((* 2) . (+ 1)) 0.5 == 3),
+':+': $(head (1 :+ [2]) == 1 and tail (1 :+ [2]) == [2]),
+':.': $(head (1 :. $[2]) == 1 and tail (1 :. $[2]) == [2]),
+'=~': $('scala' =~ 'a' and not ('scala' =~ 't')),
+'^' : $(('a' ^ '7') == 'a7'),
+'div': $(7 div 2 == 3),
+'shl': $(7 shl 2 == 28),
+'shr': $(35 shr 3 == 4),
+'-x': $(x = 2; -x == 0 - 2),
+'nullptr?': $(nullptr? [] and not (nullptr? 42)),
+'latch': $(latch 7 $true),
+'flip': $(flip (-) 2 3 == 1),
+'number': $(number '13' == 13),
+'min': $(min 897 13 == 13),
+'max': $(max 897 13 == 897),
+'abs': $(abs 52 == 52 and abs (-4) == 4),
+'any': $(any (== 3) [1 .. 5] and not (any (== 3) [5 .. 10])),
+'all': $(not (all (!= 3) [1 .. 5]) and (all (!= 3) [5 .. 10])),
+'contains?': $(contains? 3 [1 .. 5] and not (contains? 3 [5 .. 10])),
+'default': $(default false (not) (Some false)),
+'struct': $(f a = { var x = a }; (f 33).x := 3; true),
+'lambda': $($$$$1 2 3 4 5 == 1),
+'fun1': $(f a = a; f 1 == 1),
+'fun2_1': $(f a b = a; f 1 2 == 1),
+'fun2_2': $(f a b = b; f 1 2 == 2),
+'fun3_1': $(f a b c = a; f 1 2 3 == 1),
+'fun3_2': $(f a b c = b; f 1 2 3 == 2),
+'fun3_3': $(f a b c = c; f 1 2 3 == 3),
+'fun4_1': $(f a b c d = a; f 1 2 3 4 == 1),
+'fun4_2': $(f a b c d = b; f 1 2 3 4 == 2),
+'fun4_3': $(f a b c d = c; f 1 2 3 4 == 3),
+'fun4_4': $(f a b c d = d; f 1 2 3 4 == 4),
+'fun5_1': $(f a b c d e = a; f 1 2 3 4 5 == 1),
+'fun5_2': $(f a b c d e = b; f 1 2 3 4 5 == 2),
+'fun5_3': $(f a b c d e = c; f 1 2 3 4 5 == 3),
+'fun5_4': $(f a b c d e = d; f 1 2 3 4 5 == 4),
+'fun5_5': $(f a b c d e = e; f 1 2 3 4 5 == 5),
+'funp2_1': $(f = (_ a b = a) 1; f 2 == 1),
+'funp2_2': $(f = (_ a b = b) 1; f 2 == 2),
+'funp3_1': $(f = (_ a b c = a) 1; f 2 3 == 1),
+'funp3_2': $(f = (_ a b c = b) 1; f 2 3 == 2),
+'funp3_2': $(f = (_ a b c = c) 1; f 2 3 == 3),
+'funp4_1': $(f = (_ a b c d = a) 1; f 2 3 4 == 1),
+'funp4_2': $(f = (_ a b c d = b) 1; f 2 3 4 == 2),
+'funp4_3': $(f = (_ a b c d = c) 1; f 2 3 4 == 3),
+'funp4_4': $(f = (_ a b c d = d) 1; f 2 3 4 == 4),
+'funp5_1': $(f = (_ a b c d e = a) 1; f 2 3 4 5 == 1),
+'funp5_2': $(f = (_ a b c d e = b) 1; f 2 3 4 5 == 2),
+'funp5_3': $(f = (_ a b c d e = c) 1; f 2 3 4 5 == 3),
+'funp5_4': $(f = (_ a b c d e = d) 1; f 2 3 4 5 == 4),
+'funp5_5': $(f = (_ a b c d e = e) 1; f 2 3 4 5 == 5),
+'drop-1': $(drop (-1) [1..3,7] == [1,2,3,7]),
+'drop0': $(drop 0 [1..3,7] == [1,2,3,7]),
+'drop1': $(drop 1 [1..3,7] == [2,3,7]),
+'drop2': $(drop 2 [1..3,7] == [3,7]),
+'drop3': $(drop 3 [1..3,7] == [7]),
+'drop4': $(nullptr? (drop 4 [1..3,7])),
+'drop5': $(nullptr? (drop 5 [1..3,7])),
+'drop-1r': $(drop (-1) (reverse [2..4]) == [4,3,2]),
+'drop0r': $(drop 0 (reverse [2..4]) == [4,3,2]),
+'drop1r': $(drop 1 (reverse [2..4]) == [3,2]),
+'drop2r': $(drop 2 (reverse [2..4]) == [2]),
+'drop3r': $(nullptr? (drop 3 (reverse [2..4]))),
+'drop4r': $(nullptr? (drop 4 (reverse [2..4]))),
+'drop-1l': $(drop (-1) [1,2,3] == [1,2,3]),
+'drop0l': $(drop 0 [1,2,3] == [1,2,3]),
+'drop1l': $(drop 1 [1,2,3] == [2,3]),
+'drop2l': $(drop 2 [1,2,3] == [3]),
+'drop3l': $(nullptr? (drop 3 [1,2,3])),
+'drop4l': $(nullptr? (drop 4 [1,2,3])),
+'drop-1a': $(drop (-1) [1..3] == [1,2,3]),
+'drop0a': $(drop 0 (array [1..3]) == [1,2,3]),
+'drop1a': $(drop 1 (array [1..3]) == [2,3]),
+'drop2a': $(drop 2 (array [1..3]) == [3]),
+'drop3a': $(nullptr? (drop 3 (array [1..3]))),
+'drop4a': $(nullptr? (drop 4 (array [1..3]))),
+'drop-1b': $(drop (-1) new String('123')::getBytes() == [49,50,51]),
+'drop0b': $(drop 0 new String('123')::getBytes() == [49,50,51]),
+'drop1b': $(drop 1 new String('123')::getBytes() == [50,51]),
+'drop2b': $(drop 2 new String('123')::getBytes() == [51]),
+'drop3b': $(nullptr? (drop 3 new String('123')::getBytes())),
+'drop4b': $(nullptr? (drop 4 new String('123')::getBytes())),
+'take-1': $(nullptr? (take (-1) [11..13,7])),
+'take0': $(nullptr? (take 0 [11..13,7])),
+'take1': $(take 1 [11..13,7] == [11]),
+'take2': $(take 2 [11..13,7] == [11,12]),
+'take3': $(take 3 [11..13,7] == [11,12,13]),
+'take4': $(take 4 [11..13,7] == [11,12,13,7]),
+'take5': $(take 5 [11..13,7] == [11,12,13,7]),
+'take-1r': $(nullptr? (take (-1) (reverse [2..4]))),
+'take0r': $(nullptr? (take 0 (reverse [2..4]))),
+'take1r': $(take 1 (reverse [2..4]) == [4]),
+'take2r': $(take 2 (reverse [2..4]) == [4,3]),
+'take3r': $(take 3 (reverse [2..4]) == [4,3,2]),
+'take4r': $(take 4 (reverse [2..4]) == [4,3,2]),
+'take-1l': $(nullptr? (take (-1) [1,2,3])),
+'take0l': $(nullptr? (take 0 [1,2,3])),
+'take1l': $(take 1 [1,2,3] == [1]),
+'take2l': $(take 2 [1,2,3] == [1,2]),
+'take3l': $(take 3 [1,2,3] == [1,2,3]),
+'take4l': $(take 4 [1,2,3] == [1,2,3]),
+'take-1a': $(nullptr? (take (-1) (array [11..13]))),
+'take0a': $(nullptr? (take 0 (array [11..13]))),
+'take1a': $(take 1 (array [11..13]) == [11]),
+'take2a': $(take 2 (array [11..13]) == [11,12]),
+'take3a': $(take 3 (array [11..13]) == [11,12,13]),
+'take4a': $(take 4 (array [11..13]) == [11,12,13]),
+'take-1b': $(nullptr? (take (-1) new String('123')::getBytes())),
+'take0b': $(nullptr? (take 0 new String('123')::getBytes())),
+'take1b': $(take 1 new String('123')::getBytes() == [49]),
+'take2b': $(take 2 new String('123')::getBytes() == [49,50]),
+'take3b': $(take 3 new String('123')::getBytes() == [49,50,51]),
+'take4b': $(take 4 new String('123')::getBytes() == [49,50,51]),
+'findb': $(find (== 0) ([1,2,0,3,4,5] as ~byte[] as list<number>) == [0,3,4,5]),
+'unwrap': $(unwrap [Some 3, None (), Some 4, None(), Some 5] == [3,4,5]),
+
+'constant field ref': $({a=1,get b () = a}.b == 1),
+'named lambda': do:
+    fib = (f p n c = if c <= 0 then n else f n (p + n) (c - 1) end) 0 1;
+    fib 10 == 89
+done,
+'class closure': do:
+    wtf = [:];
+    wtff x = wtf[x] := true;
+    class X(int a)
+        var x = a,
+        f _ = x,
+        int test() f (addReceived "scala"; wtff 12)
+    end;
+    class Y
+        void test() push received "test"
+    end;
+    new Y()::test();
+    new X(33)::test() == 33 and list received == ["test", "scala"] and wtf[12];
+done,
+'closure fields': do:
+    class Foo()
+      var bar = 19,
+
+      int test(int x)
+        f () = bar + x;
+        f ()
+    end;
+    foo = new Foo();
+    foo::test(23) == 42
+done,
+'try-catch class closure': do: 
+    kill _ = ();
+    class Flush
+        void run()
+            try 
+            catch Exception ex:
+                kill ()
+            end;
+    end;
+    not nullptr? new Flush()
+done,
+'tail recursion': do:
+    compile inStart tokens =
+       case tokens of
+        1 :+ rest:
+            compile false rest;
+        _ :+ rest:
+            if inStart then
+                compile true rest
+            else
+                true
+            end;
+        _: false;
+        end;
+    compile true [1, 2]
+done,
+'with': do:
+    a = {x = 10};
+    b = {x = 12};
+    a with b == b
+done,
+'with section': do:
+    default = {a = 10, b = true};
+    (with {a = 3}) default == {a = 3, b = true};
+done,
+'escaped symbols': do:
+    import ria.lang.Struct;
+    
+    stru = {``one-var test`` = 'foo-text'};
+    
+    'foo-text' == stru.``one-var test``
+    and ((stru as ~Object) cast ~Struct)::get('one-var test')::equals("foo-text");
+done,
+'opaque types': do:
+    typedef opaque st<v,s> = s -> {fst is v, snd is s};
+    typedef opaque magic<x> = list<x>;
+    let m = { create = id, values = id } as {
+        create is list<`a> -> magic<`a>,
+        values is magic<`b> -> list<`b>,
+    };
+    let v = m.create [5..7] is magic<number>;
+    m.values v == [5..7]
+done,
+'opaque java types': do:
+    typedef opaque foo = ~Integer;
+    "${new Integer(22) as foo}" == "22"
+done,
+'opaque struct 1': do:
+    expectCompileError
+       'typedef opaque st = {a is number, b is ()};
+        wrap = id as {a is number} -> st;
+        unwrap = id as st -> {a is number, b is ()};
+        (unwrap (wrap {a = 42})).b'
+done,
+'opaque struct 2': do:
+    expectCompileError
+       'typedef opaque st = {.a is number};
+        wrap = id as {.a is number} -> st;
+        unwrap = id as st -> {.a is number, .b is ()};
+        (unwrap (wrap {a = 42})).b'
+done,
+'var recursion': do:
+    var f x =
+        if x then
+            f := const 42;
+            f false
+        else
+            0 // failed - should never reach here
+        end;
+    f true == 42
+done,
+'() as string': $(strIndexOf (() as ~String) "x" 0 == -1),
+'primitive array store': do:
+    arr = array [1];
+    p_arr = new double[1];
+    p_arr[0] := arr[0];
+    p_arr[0] == 1
+done,
+'eval load scope': do:
+    load ria.lang.compiler.eval;
+    c = evaluateCode [SourceReader $'module foo; x = 4; ()'];
+    case (c [Bind ()] 'r = load foo; r').result of
+    Result _: ();
+    ...
+    end;
+    case (c [] 'x').result of
+    CompileException _: true;
+    ...
+    end
+done,
+'typevars in map': do:
+    testModule = "
+        module test;
+        typedef obj = { f is () -> `a };
+        st d = { data = d, ix x y =
+            case d of A aa: a = aa[x]; a[y]; B bb: b = bb[y]; b[x]; end };
+        mk s = s with { f () = st (A (array [[1]])); };
+        { mk } as { mk is obj -> obj }
+    ";
+    load ria.lang.compiler.eval;
+    modules = array [];
+    compileFiles [SourceReader $testModule] [Type (push modules)]
+                     ['test.ria'];
+    length modules == 1
+done,
+'double arguments': do:
+    class Doubles(double a, double b, double c)
+        double res()
+            (a + b) / c,
+        double calc(double x, double y, double z)
+            let s = x + y;
+            s / z
+    end;
+    t = new Doubles(3, 5, 2);
+    [t::res(), t::calc(3, 5, 2)] == [4, 4]
+done,
+'$case of 1': do:
+    rs = "[${""}]";
+    f st = $case of
+        Token n: Error rs `const` OK n
+        end;
+    f "" (Token "foo") == Error "[]"
+done,
+'$case of 2': do:
+    rs = "[${""}]";
+    f st = $case of
+        Token n: Error rs `const` OK n
+        end;
+    id f "" (Token "foo") == Error "[]"
+done,
+'evil2': do:
+    expectCompileError
+       'var id x = x;
+        do:
+                z = { a = id }.a;
+                println (z "a");
+                println (z 42)
+        done (id := do x: x + 1 done)'
+done,
+'mutability and polymorphism': do:
+    expectCompileError
+     "var v = None ();
+        o = { setValue x = v := Some x, value () = v };
+        o.setValue 'scala';
+        case o.value () of
+        Some x: println (x + 2);
+        None _: println \"None\";
+        end"
+done,
+'value restriction with non-polymorphic fields': do:
+    expectCompileError
+       'x = lazy ${var z = [], get last () = head z};
+        count () = length (x ()).last.fubar;
+        (x ()).z := { tomato = false } :: (x ()).z;
+        count () |> println;'
+done,
+'struct polymorphism restrictions 1': do:
+    expectCompileError
+       'x = {var z = [], get last () = head z};
+        count () = length x.last.fubar;
+        x.z := { fubar = [], get tomato () = false } :: [];
+        x.last.fubar := "hi" :: x.last.fubar;
+        count () |> println;'
+done,
+'struct polymorphism restrictions 2': do:
+    expectCompileError
+       'x = {var z = [], get last () = head z};
+        count () = length x.last.fubar;
+        count2 () = length x.last.bar;
+        x.z := [{fubar=[true]}];
+        count2 () |> println;'
+done,
+'invalid escaping polymorphism': do:
+    expectCompileError
+     "v = (var x = [];
+             r a b =
+               (f a = x := a;
+                g () = head x;
+                a f;
+                b g);
+             r);
+        v (_ f = f [true]) $();
+        v $() (_ g = println (g () + 3))"
+done,
+'invalid escaping polymorphism 2': do:
+    expectCompileError
+     "v = (var x = [];
+             do a b:
+                a (_ v = x := v);
+                b (head x)
+             done);
+        v ([true] |>) $();
+        v $() (println . (+3));"
+done,
+'struct field polymorphism': do:
+    x = { f a = a };
+    x.f 5 == 5 and x.f true
+done,
+'non-polymorphic type vars in module': do:
+    src = 'module nonpoly;
+        var x = [];
+        {
+            f a = x := a,
+            g () = head x
+        }';
+    try
+        load ria.lang.compiler.eval;
+        compileFiles [SourceReader $src] [Type $()] ['nonpoly.ria'];
+        false
+    catch ria.lang.compiler.CompileException e:
+        e::getMessage() =~ 'defined'
+    end
+done,
+'case of variant list': do:
+    case [A 1, A 2] of [A a, A b]: a + b; ... end == 3
+done,
+'base64': do:
+    bytes = map (_ n = [1..n]) [0..0xff];
+    map (base64Decode . base64Encode) bytes == bytes
+done,
+'tailrec2': do:
+    foo = {
+        maxPos = 8,
+        var board = false,
+        hasWon _ = board,
+        check me op =
+            if hasWon op then
+                1
+            else
+                (tryPos best pos =
+                    if pos > maxPos or best > 0 then
+                        best
+                    else
+                        board := true;
+                        res = check op me;
+                        if res > best then
+                            tryPos res (pos + 1)
+                        else
+                            tryPos best (pos + 1)
+                        end
+                    end) (-2) maxPos
+            end,
+    };
+    foo.check 'O' 'X' == 1
+done,
+'tailrec4': do:
+    foo = {
+        maxPos = 8,
+        var board = false,
+        hasWon _ = board,
+        check me op =
+            if hasWon op then
+                1
+            else
+                (tryPos a b best pos =
+                    if pos > maxPos or best > 0 then
+                        best
+                    else
+                        board := true;
+                        res = check op me;
+                        if res > best then
+                            tryPos a b res (pos + 1)
+                        else
+                            tryPos a b best (pos + 1)
+                        end
+                    end) 'a' 'b' (-2) maxPos
+            end,
+    };
+    foo.check 'O' 'X' == 1
+done,
+'method-tailrec4': do:
+    tr a b c d =
+        if c == 'wtf' then
+            a
+        else
+            tr true b 'wtf' 0
+        end;
+    tr false 0 'test' 0
+done,
+'module-var-fun': do:
+    load mvarfun;
+    (f ()).v == [true]
+done,
+'modify-var-fun-ref': do:
+    var cached _ = {v=false};
+    st = { f x = cached x, setf f = cached := f };
+    st.setf (const {v=true});
+    (st.f ()).v
+done,
+'Case.': do:
+    f x is Case. `b -> `b = case x of Case a: a end;
+    f (Case 42) == 42
+done
+];
+
+var bad = 0;
+
+forHash trueTests do name f:
+    try
+        if not (f ()) then
+            bad := bad + 1;
+            println "${name} failed."
+        end
+    catch java.lang.Throwable ex:
+        bad := bad + 1;
+        println "${name} failed: ${stackTraceString ex}"
+    end
+done;
+
+total = length trueTests;
+println "Testing done, ${total - bad}/${total} OK.";

@@ -1,0 +1,10 @@
+load parsers.json;
+
+let json = jsonParse '{
+  "a": "hello",
+  "b": "world"
+}';
+
+let keys = jsKeys json;
+for keys println;
+for keys (println . jsGet json);

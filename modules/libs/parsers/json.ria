@@ -1,0 +1,269 @@
+/**
+ * JSON library for Ria.
+ */
+module parsers.json;
+
+import ria.lang: Core, Hash;
+import ria.json.JSONObj;
+
+typedef opaque json = ~Object;
+typedef json_variant =
+    String string |
+    Number number |
+    Boolean boolean |
+    Object hash<string, json> |
+    List list<json> |
+    Null ()
+;
+
+let jsStr default value is (~Object -> string) -> ~Object -> string =
+    if value instanceof String then
+        value cast string
+    else
+        default value
+    end;
+
+let jsNum default value is (~Object -> number) -> ~Object -> number =
+    if value instanceof ria.lang.RiaNum then
+        value cast number
+    else
+        default value
+    end;
+
+let jsTrue? value is ~Object -> boolean =
+    if value instanceof Boolean then
+        value cast boolean
+    else
+        undef_bool
+    end;
+
+// returns a list rather than an array to avoid typos
+// resulting in silent failure
+let jsList value is ~Object -> list<json> =
+    if value instanceof ria.lang.AbstractList then
+        value cast list<json>
+    else
+        []
+    end;
+
+let jsGet value field is ~Object -> string -> ~Object =
+    if value instanceof JSONObj then
+        (value cast ~JSONObj)::get(field)
+    end;
+
+let jsKeys value is ~Object -> list<string> =
+    if value instanceof JSONObj then
+        let keys = (value cast ~JSONObj)::keySet();
+        new ria.lang.MutableList(keys::toArray()) cast list<string>
+    else
+        []
+    end;
+
+let jsValue value is ~Object -> `a =
+    if value instanceof String then
+        String (value cast string)
+    elif value instanceof ria.lang.RiaNum then
+        Number (value cast number)
+    elif value instanceof Boolean then
+        Boolean (value cast boolean)
+    elif value instanceof JSONObj then
+        Object ((value cast ~JSONObj)::map()
+                       cast hash<string, ~Object>)
+    elif value instanceof ria.lang.MutableList then
+        List (value cast list<~Object>)
+    else
+        Null ()
+    end;
+
+let jsOf = (as ~Object);
+
+let jsOfList v is list?<json> -> ~Object =
+    if nullptr? v then
+        array [] as ~Object
+    else
+        v as ~Object
+    end;
+
+let jsOfObj v is hash<string, json> -> ~Object =
+    new JSONObj(v cast ~Hash);
+
+let jsonParse str is string -> ~Object = (
+    let invalid = failWith . ("Invalid JSON: " ^);
+    var tokens = matchAll ('\R|\s++|([{:,}\[\]]|"(?:[^\\"]|\\["\\/bfnrtu])*+"|' ^
+                         '-?\d++(?:\.\d++)?(?:[eE][+-]?\d++)?|null|true|false)')
+                          (`at` 1) invalid str |> filter (!= '');
+    let fetch () is () -> ~Object =
+        case tokens of
+        s :+ rest:
+            tokens := rest;
+            case s of
+            '': fetch ();
+            '{':
+                m = [:];
+                empty? tokens or head tokens != '}' loop (
+                    key = fetch ();
+                    if not key instanceof String then 
+                        failWith "Invalid JSON field name (${key})"
+                    end;
+                    case tokens of
+                    ':' :+ r: tokens := r;
+                    _: failWith "JSON expecting : after object field name";
+                    end;
+                    m[key] := fetch ();
+                    case head tokens of
+                    ',': tokens := tail tokens;
+                    '}': ();
+                    x: invalid x;
+                    end);
+                tokens := tail tokens;
+                new JSONObj(m cast ~Hash);
+            '[':
+                a = array [];
+                empty? tokens or head tokens != ']' loop (
+                    push a (fetch ());
+                    case head tokens of
+                    ',': tokens := tail tokens;
+                    ']': ();
+                    x: invalid x;
+                    end);
+                tokens := tail tokens;
+                a as ~Object;
+            'true' : true as ~Object;
+            'false': false as ~Object;
+            'null' : ();
+            _:  if strStarts? s '"' then
+                    let escape m =
+                        case m[1] of
+                        'n': "\n";
+                        't': "\t";
+                        'r': "\r";
+                        'b': "\b";
+                        'f': "\f";
+                        s : if strLength s <= 1 then
+                                s
+                            else
+                                x = new int[1];
+                                x[0] := Integer::parseInt(strRight s 1, 16);
+                                new String(x, 0, 1) cast string
+                            end
+                        end;
+                    (matchAll '\\(["\\/bfnrt]|u[0-9a-fA-F]{4})' escape id
+                        (strSlice s 1 (strLength s - 1)) |> strJoin '')
+                        as ~Object
+                else
+                    number s as ~Object
+                end
+            end;
+        _: failWith "Unexpected end of JSON data"
+        end;
+    res = fetch ();
+    tokens := filter defined? tokens;
+    if not empty? tokens then
+        failWith "Garbage after JSON data (${head tokens})"
+    end;
+    res
+);
+
+// Exports
+{
+    jsStr, jsNum, jsTrue?, jsList, jsGet, jsKeys, jsValue,
+    jsOfList, jsOfObj, jsonParse,
+    jsNull?  = nullptr?,
+    jsOfStr  = jsOf,
+    jsOfNum  = jsOf,
+    jsOfBool = jsOf,
+    jsNull = () as json
+} as {
+
+    /**
+     * Returns a string from the JSON value.
+     * If the value is not a string, then the default function is called
+     */
+    jsStr is (json -> string) -> json -> string,
+
+    /**
+     * Return the JSON value as a number or
+     * calls the default function with the value if not a number
+     */
+    jsNum is (json -> number) -> json -> number,
+
+    /**
+     * Returns the boolean value of the JSON value
+     * or () if the value is not a boolean
+     */
+    jsTrue? is json -> boolean,
+
+    /**
+     * Returns true if the value is JSON null.
+     *
+     * Arguments:
+     * value - JSON value
+     */
+    jsNull? is json -> boolean,
+
+    /**
+     * Convert a JSON value into a list
+     */
+    jsList is json -> list<json>,
+
+    /**
+     * Get the value of a field on a JSON object
+     */
+    jsGet is json -> string -> json,
+
+    /**
+     * Returns a list of the keys for a JSON object
+     */
+    jsKeys is json -> list<string>,
+
+    /**
+     * Returns the JSON value as a native Ria type
+     */
+    jsValue is json -> json_variant,
+
+    /**
+     * Create a JSON value from string.
+     *
+     * Arguments:
+     * string - a string to use
+     */
+    jsOfStr is string -> json,
+
+    /**
+     * Create a JSON value from number.
+     *
+     * Arguments:
+     * number - a number to use
+     */
+    jsOfNum  is number -> json,
+
+    /**
+     * Create a JSON value from boolean.
+     *
+     * Arguments:
+     * boolean - a boolean to use
+     */
+    jsOfBool is boolean -> json,
+
+    /**
+     * Create a JSON object from fields in a hash table representation.
+     *
+     * Arguments:
+     * fields - Fields for the JSON object
+     */
+    jsOfObj is hash<string, json> -> json,
+
+    /**
+     * Create a JSON value from list.
+     *
+     * Arguments:
+     * list - list of JSON values
+     */
+    jsOfList is list?<json> -> json,
+
+    /// JSON null value.
+    jsNull is json,
+
+    /// Parse a string into a JSON object
+    jsonParse is string -> json
+}

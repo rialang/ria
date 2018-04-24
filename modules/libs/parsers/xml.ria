@@ -1,0 +1,419 @@
+module parsers.xml;
+
+import javax.xml.stream:
+   XMLInputFactory,
+   XMLOutputFactory,
+   XMLStreamReader,
+   XMLStreamWriter,
+   XMLStreamConstants;
+
+typedef xml_value =
+    /// Character data section.
+    PCData string |
+    /// CData section.
+    CData string |
+    /// XML comment string.
+    Comment string |
+    /// Document Type Definition.
+    /// May exist only in root elements tailValues list.
+    DTD string
+;
+
+typedef xmlns_declaration = {
+    /// Namespace prefix for XML elements and attributes.
+    prefix is string,
+    /// Namespace URI.
+    uri is string
+};
+
+// XML element structure returned by xmlElement and xmlParse.
+typedef xml_element = {
+    /// XML element local name.
+    name is string,
+
+    attributes is hash<string, string>,
+
+    /// Nested XML child elements.
+    elements is array<xml_element>,
+
+    /// Text contents of this element
+    var text is string,
+
+    /// List of non-element XML sections directly after this elements starting
+    /// tag (and before any nested element), including XML comments.
+    var values is list<xml_value>,
+
+    var tailValues is list<xml_value>,
+
+    /**
+     * Namespace URI for the XML elements name.
+     * Value undef_str is used, when namespace prefix is not present.
+     */
+    var uri is string,
+    
+    /// List of xmlns namespaces declared with this element
+    /// (these use the xmlns:prefix="uri" form in the actual XML).
+    var xmlns is list<xmlns_declaration>
+};
+
+let xmlElement' name uri attr
+        is string -> string -> hash<string, string> -> xml_element = (
+    if name == '' then
+        failWith "Element must have a name"
+    end;
+    {
+        name,
+        attributes = attr,
+        elements = array [],
+        var values = [],
+        var tailValues = [],
+        get text () =
+            // speed hack
+            var res = () as ~java.lang.StringBuilder;
+            var str = '';
+            for (values :+ map (.tailValues) elements) do vl:
+                for vl do v:
+                    if str == '' then
+                    elif nullptr? res then
+                        res := new java.lang.StringBuilder(str)
+                    else
+                        _ = res::append(str cast ~String)
+                    end;
+                    str := case v of
+                           PCData s: s; 
+                           CData  s: s;
+                           _: "";
+                           end;
+                done
+            done;
+            if nullptr? res then str else "${res::append(str)}" end,
+        set text str =
+            for elements do element:
+                element.tailValues := []
+            done;
+            values := [PCData str],
+        var uri = uri,
+        var xmlns = []
+    }
+);
+
+let xmlElement name is string -> xml_element =
+    xmlElement' name undef_str [:];
+
+let add_value e v =
+   (l = e.elements is array<`a>;
+    if empty? l then
+        e.values := v :+ e.values
+    else
+        e = l[length l - 1];
+        e.tailValues := v :+ e.tailValues
+    end);
+
+let xmlParse source is `a -> xml_element = (
+    var keepWS = false;
+    var keepNS = false;
+    var nsAware = true;
+    src = array [];
+    f = XMLInputFactory::newInstance();
+    for source do opt:
+        case opt of
+        // Read XML from this InputStream instance (expects UTF-8 encoding).
+        InputStream _:
+            push src opt;
+
+        // Read XML from this Reader instance.
+        Reader _:
+            push src opt;
+
+        // Read XML from  this Source instance.
+        Source _:
+            push src opt;
+
+        // Parse this string as XML.
+        String _:
+            push src opt;
+
+        // Read XML from a file with this name.
+        File _:
+            push src opt;
+
+        // Turns on/off namespace processing for XML 1.0 support.
+        // Default is true (for conforming XML Streaming API implementations).
+        NSAware flag:
+            nsAware := flag;
+            f::setProperty(XMLInputFactory::IS_NAMESPACE_AWARE, flag is boolean);
+
+        // Turns on implementation specific DTD validation.
+        Validate ():
+            f::setProperty(XMLInputFactory::IS_VALIDATING, true);
+
+        // Whether to require the processor to coalesce adjacent character
+        // data. Coalescing can eat CDATA living between PCDATA.
+        // Default is false (for conforming XML Streaming API implementations).
+        Coalescing flag:
+            f::setProperty(XMLInputFactory::IS_COALESCING, flag is boolean);
+
+        // Element attribute names (in .attributes hash) will be in the form
+        // '{namespace-URI}attribute-name' for attributes that had
+        // a namespace prefix in XML.
+        // When combined with `NSAware false` option, the prefix part in
+        // attribute names will be preserved.
+        KeepNS ():
+            keepNS := true;
+
+        // Keep ignorable whitespace (as defined in the
+        // XML 1.1 recommendation).
+        KeepWS ():
+            keepWS := true;
+
+        // Turns on both KeepNS (preserving attribute namespaces) and
+        // KeepWS (preserving ignorable whitespace).
+        KeepAll ():
+            keepNS := true;
+            keepWS := true;
+        end
+    done;
+    if empty? src then
+        failWith "No input source given to xmlParse"
+    end;
+    if length src != 1 then
+        failWith "Multiple input sources are not allowed for xmlParse"
+    end;
+    r = case src[0] of
+        InputStream s:
+            f::createXMLStreamReader(s is ~java.io.InputStream, 'UTF-8');
+        Reader ir:
+            f::createXMLStreamReader(ir is ~java.io.Reader);
+        Source s:
+            f::createXMLStreamReader(s is ~javax.xml.transform.Source);
+        String s:
+            f::createXMLStreamReader(new java.io.StringReader(s));
+        File fn:
+            f::createXMLStreamReader(new java.io.FileInputStream(
+                    fn is string cast ~String), 'UTF-8');
+        ...
+        end;
+    root = xmlElement 'UTF-8';
+    var current = root;
+    stack = array [];
+    r::hasNext() loop (
+        let cur = current;
+        case r::next() of
+        XMLStreamConstants::START_ELEMENT:
+            var i = r::getAttributeCount();
+            attr = new ria.lang.Hash(i) cast hash<string, string>;
+            (i := i - 1; i >= 0) loop (
+                qn = r::getAttributeName(i);
+                attr[if nsAware then
+                        if keepNS and qn::getNamespaceURI() != '' then
+                            "{${qn::getNamespaceURI()}}${qn::getLocalPart()}"
+                        else
+                            qn::getLocalPart()
+                        end
+                     elif keepNS and qn::getPrefix() != '' then
+                        "${qn::getPrefix()}:${qn::getLocalPart()}"
+                     else
+                        qn::getLocalPart()
+                     end] := r::getAttributeValue(i)
+            );
+            push stack cur;
+            current := xmlElement' r::getLocalName() r::getNamespaceURI() attr;
+            push cur.elements current;
+            i := r::getNamespaceCount();
+            (i := i - 1; i >= 0) loop
+                current.xmlns := {
+                    prefix = r::getNamespacePrefix(i),
+                    uri = r::getNamespaceURI(i)
+                } :+ current.xmlns;
+        XMLStreamConstants::END_ELEMENT:
+            cur.values := reverse cur.values;
+            for cur.elements do e:
+                e.tailValues := reverse e.tailValues
+            done;
+            current := pop stack;
+        XMLStreamConstants::CDATA:
+            add_value cur (CData r::getText());
+        XMLStreamConstants::COMMENT:
+            add_value cur (Comment r::getText());
+        XMLStreamConstants::DTD:
+            add_value cur (DTD r::getText());
+        _:
+            if r::hasText() and (not r::isWhiteSpace() or keepWS) then
+                add_value cur (PCData r::getText())
+            end
+        end);
+    r::close();
+    if empty? root.elements then
+        failWith "No document element"
+    end;
+    current := root.elements[0];
+    current.tailValues := root.values;
+    current
+);
+
+let write_values w values is ~XMLStreamWriter -> list<xml_value> -> () =
+    for values
+       $case of
+        PCData  str: w::writeCharacters(str);
+        CData   str: w::writeCData(str);
+        Comment str: w::writeComment(str);
+        _: ();
+        end;
+
+let write_attr w e is ~XMLStreamWriter -> xml_element -> () = (
+    for e.xmlns do ns:
+        w::writeNamespace(ns.prefix, ns.uri)
+    done;
+    var i = (e.attributes is hash<string, string>
+        cast ~java.util.Map)::entrySet()::iterator();
+    i::hasNext() loop (
+        let e = i::next() cast ~java.util.Map$Entry;
+        let name = "${e::getKey()}";
+        let value = "${e::getValue()}";
+        if name `strStarts?` '{' then
+            local = strRightOf '}' name;
+            uri = strSlice name 1 (strLength name - strLength local - 1);
+            w::writeAttribute('xml', uri, local, value)
+        else
+            w::writeAttribute(name, value)
+        end));
+
+let xmlWrite to root = (
+    let f = XMLOutputFactory::newInstance();
+    var indent = undef_str;
+    var w_was = () as ~XMLStreamWriter;
+    var w = () as ~XMLStreamWriter;
+    var buf = () as ~java.io.StringWriter;
+    var cb = $();
+    for to
+       $case of
+        // Write XML to this OutputStream instance in UTF-8 encoding.
+        OutputStream os:
+            w_was := w;
+            w := f::createXMLStreamWriter(os is ~java.io.OutputStream, 'UTF-8');
+
+        // Write XML to this Writer instance.
+        Writer ow:
+            w_was := w;
+            w := f::createXMLStreamWriter(ow is ~java.io.Writer);
+        
+        // Write UTF-8 encoded XML to file with this name.
+        File fn:
+            w_was := w;
+            w := f::createXMLStreamWriter(new java.io.FileOutputStream(
+                    fn is string cast ~String), 'UTF-8');
+
+        // Write XML to this Result instance.
+        Result res:
+            w_was := w;
+            w := f::createXMLStreamWriter(res is ~javax.xml.transform.Result);
+
+        // Apply this function to genereted XML (string).
+        Out callback:
+            cb := callback;
+            buf := new java.io.StringWriter();
+            w_was := w;
+            w := f::createXMLStreamWriter(buf);
+
+        // Format generated XML by inserting "\n" before each start element,
+        // and indenting the lines with this string (repeated by element
+        // nesting depth).
+        Indent indent_str:
+            indent := indent_str;
+        end;
+    if nullptr? w then
+        failWith "No output destination given to xmlWrite"
+    end;
+    if not nullptr? w_was then
+        failWith "Multiple output destinations are not allowed for xmlWrite"
+    end;
+
+    // is this strictly necessary to make them immutable
+    // does it really matter? Ok, humour me please...
+    let w = w;
+    let indent = indent;
+
+    w::writeStartDocument();
+
+    for root.tailValues
+       $case of
+        DTD dtd:
+            if dtd != '' then
+                w::writeDTD(dtd)
+            end;
+        Comment str:
+            w::writeComment(str);
+        _: ()
+        end;
+    w::setPrefix("xml", "http://www.w3.org/XML/1998/namespace");
+    let iter cur_indent element = (
+        let new_indent =
+            if defined? indent then
+                w::writeCharacters(cur_indent);
+                cur_indent ^ indent
+            else
+                ""
+            end;
+        for element.xmlns do ns:
+            if defined? ns.prefix then
+                w::setPrefix(ns.prefix, ns.uri)
+            else
+                w::setDefaultNamespace(ns.uri)
+            end
+        done;
+        let uri = element.uri;
+        if empty? element.elements and empty? element.values then
+            if defined? uri then
+                w::writeEmptyElement(uri,
+                    element.name is string cast ~String)
+            else
+                w::writeEmptyElement(element.name cast ~String)
+            end;
+            write_attr w element
+        else
+            if defined? uri then
+                w::writeStartElement(uri, element.name cast ~String)
+            else
+                w::writeStartElement(element.name cast ~String)
+            end;
+            write_attr w element;
+            write_values w element.values;
+            let elements = element.elements;
+            for elements (iter new_indent);
+            if defined? indent and not empty? elements then
+                w::writeCharacters(cur_indent)
+            end;
+            w::writeEndElement();
+        end;
+        if not same? element root then
+            write_values w element.tailValues
+        end
+    );
+
+    iter "\n" root;
+    w::writeEndDocument();
+    w::flush();
+    if not nullptr? buf then
+        cb "${buf}"
+    end
+);
+
+// basic XPath-style searching
+let xmlByPath path element = (
+    var elem = [element];
+    for (path is list<string>) do name:
+        result = array [];
+        for elem do ee:
+            for ee.elements do e:
+                if e.name == name then
+                    push result e
+                end
+            done
+        done;
+        elem := list result
+    done;
+    elem
+);
+
+// Exports
+{ xmlElement, xmlParse, xmlWrite, xmlByPath }

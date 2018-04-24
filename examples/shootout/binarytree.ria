@@ -1,0 +1,30 @@
+let makeTree item depth =
+    if depth > 0 then
+        let depth = depth - 1;
+        let left = makeTree (item * 2 - 1) depth;
+        let right = makeTree (item * 2) depth;
+        { item, get left () = Some left, get right () = Some right }
+    else
+        { item, get left () = None (), get right () = None () }
+    end;
+
+let defaultNode = default 0 (.item);
+let check {item, left, right} = item + defaultNode left - defaultNode right;
+let out s depth check = println "${s} of depth ${depth}\t check: ${check}";
+
+let checkDepth depth item =
+    check (makeTree item depth) + check (makeTree (-item) depth);
+
+let minDepth = 4;
+let n = if empty? _argv then 2 else number _argv[0] end;
+let maxDepth = max (minDepth + 2) n;
+
+out "stretch tree" (maxDepth + 1) (check (makeTree 0 (maxDepth + 1)));
+let longLived = makeTree 0 maxDepth;
+var depth = minDepth;
+depth <= maxDepth loop
+   (let iterations = 1 shl (maxDepth - depth + minDepth);
+    out "${iterations * 2}\t trees" depth
+        (fold (_ v i = v + checkDepth depth i) 0 [1 .. iterations]);
+    depth := depth + 2);
+out "long lived tree" maxDepth (check longLived);

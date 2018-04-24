@@ -1,0 +1,66 @@
+module monad.maybe;
+
+load monad.types;
+
+let maybe is monad = {
+
+  bind fn x is (`a -> maybe<`b>) -> maybe<`a> -> maybe<`b> =
+    case x of
+    Some y: fn y;
+    None (): none;
+    end,
+
+  return x = Some x;
+};
+
+// Exports
+{maybe};
+
+// Examples
+
+/*
+let maybePrint a = (
+  println a;
+  none;
+);
+
+(
+  let bind fn v = fn v;
+  x <- 1;
+  x = x + 1;
+  y <- 3 + 4;
+  z = x + y;
+  z == 9 |> println;
+);
+
+(
+  maybe. r1 <- (Some (Some (Some 1)));
+  maybe. r2 <- r1;
+  maybe. r3 <- r2;
+  maybe. return (r3 == 1)
+) == (Some true) |> println;
+
+s = (
+  maybe. s1 <- None ();
+  maybe. return (s1 + 2)
+);
+s == none |> println;
+
+(>>=) st v = st.bind v;
+
+Some 3
+|> maybe >>= (_ x = maybe.return (x + 1))
+|> maybe >>= maybePrint
+|> $();
+
+// Mapping using maybe
+[1,2,3]
+|> map maybe.return
+|> map (maybe >>= (do x: maybe.return (x * 2) done))
+|> unwrap |> println;
+
+// A better example
+[Some 1, Some 4, None (), Some 2, None ()]
+|> map (maybe >>= (_ x = maybe.return (x * 2)))
+|> unwrap |> println;
+*/

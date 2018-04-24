@@ -1,0 +1,50 @@
+module ria.lang.compiler.showtype;
+
+typedef typeitem<type> = {
+    name is string,
+    type is type,
+    tag is string,
+    mutable is boolean,
+    description is string
+};
+
+typedef type =
+    Simple string
+    | Parametric {
+        type is string,
+        params is list<type>
+    }
+    | Function list<type>
+    | Variant list<typeitem<type>>
+    | Struct list<typeitem<type>>
+    | Alias {
+        alias is string,
+        type is type
+    };
+
+typedef showType_fun = string -> type -> string;
+
+typedef showType_param =
+    ShowType showType_fun
+    | Indent string
+    | FormatDoc (string -> string -> string)
+    | CommentDoc ()
+;
+
+{
+    showType param is list<showType_param> -> showType_fun = (
+        let fun = new ShowTypeFun();
+        for param
+           $case of
+            Indent s:
+                fun::indentStep := s;
+            ShowType f:
+                fun::showType := f is showType_fun cast ~ria.lang.Fun;
+            FormatDoc f:
+                fun::formatDoc :=
+                    f is string -> string -> string cast ~ria.lang.Fun;
+            CommentDoc _:
+                fun::formatDoc := fun as ~ria.lang.Fun; // this is the magic
+            end;
+        fun cast showType_fun),
+}

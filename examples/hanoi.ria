@@ -1,0 +1,16 @@
+let hanoi n init temp dest =
+    (if n == 1 then
+        "${init} to ${dest}" |> println
+    else
+        let n = n - 1;
+        // move n-1 disks from A to B, with C as temp
+        hanoi n init dest temp;
+
+        // move disk from A to C, with B as temp
+        hanoi 1 init temp dest;
+
+        // move n-1 disks from B to C, with A as temp
+        hanoi n temp init dest;
+    end);
+
+hanoi 3 'A' 'B' 'C';

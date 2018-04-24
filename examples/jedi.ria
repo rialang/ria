@@ -1,0 +1,61 @@
+typedef forceUser = {
+  name is string,
+  strength is number,
+  type is string
+};
+
+let luke = {
+  name = 'Luke',
+  strength = 1000,
+  type = 'jedi'
+};
+
+let yoda = {
+  name = 'Yoda',
+  strength = 800,
+  type = 'jedi'
+};
+
+let palpatine = {
+  name = 'Darth Sidious',
+  strength = 800,
+  type = 'sith',
+  darkside = true
+};
+
+let vader = {
+  name = 'Darth Vader',
+  strength = 900,
+  type = 'sith'
+};
+
+let obiwan = {
+  name = 'Obiwan Kenobi',
+  strength = 700,
+  type = 'jedi'
+};
+
+let forceUsers = [luke, obiwan, yoda, vader, palpatine] is list<forceUser>;
+let isType type = (type ==) . (.type);
+
+let jedi = forceUsers |> filter (isType 'jedi');
+let sith = forceUsers |> filter (isType 'sith');
+
+let strongestFirst = sortBy (on (>) (.strength));
+let names = map (.name);
+
+let printJedi jedi = "Name: ${jedi.name}\nStrength: ${jedi.strength}" |> println;
+
+println "
+Jedi
+----";
+jedi |> strongestFirst |> foreach printJedi;
+println "
+Sith
+----";
+sith |> strongestFirst |> foreach printJedi;
+
+println "
+Force Users
+-----------";
+jedi ++ sith |> strongestFirst |> foreach printJedi;

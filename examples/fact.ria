@@ -1,0 +1,24 @@
+let fact x =
+    if x == 0 then
+        1
+    else
+        x * fact (x - 1)
+    end;
+
+let fact_ =
+   (f acc x =
+        if x == 0 then
+            acc
+        else
+            f (acc * x) (x - 1)
+        end) 1;
+
+let y f x = f (y f) x;
+let yfact = y do rec x:
+    if x == 0 then 1 else x * rec (x - 1) end
+done;
+
+println {fact = fact 5};
+println {fact_ = fact_ 5};
+println {yfact = yfact 5};
+println (fact_ 1000);

@@ -1,0 +1,23 @@
+let foo = "Squiggle 2";
+
+if foo =~ '[a-z]' then
+    println 'contains small letter'
+end;
+
+let str = "flip, 33, pattern, 34, 123!";
+
+let matcher = like 'pattern.*!' str;
+(
+    match = matcher ();
+    println match;
+    not empty? match
+) loop;
+
+for [
+    strJoin '' (matchAll '\d+' do s: "${number s[0] + 1}" done id str),
+    strJoin '' (matchAll '\d+' (string . (+1) . number . head) id str),
+    strJoin '' (matchAll ',\s+' $';' id str),
+    substAll ',\s+' ';' str,
+    "${strSplit ',\s+' str}",
+] println;
+

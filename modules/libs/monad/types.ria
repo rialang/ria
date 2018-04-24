@@ -1,0 +1,8 @@
+module monad.types;
+
+typedef monad = {
+  bind is (`a -> `b) -> `c -> `b,
+  return is `a -> `c
+};
+
+();

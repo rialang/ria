@@ -1,0 +1,8 @@
+load ria.lang.compiler.eval;
+
+// gives context
+let eval = evaluateCode [];
+
+for (stdin.lines ()) do line:
+    println (eval [Bind ()] line).str
+done

@@ -1,0 +1,15 @@
+module simplemodule;
+/**
+* This is a simple module with documentation
+*/
+
+{
+  /** An integer value that can be changed */
+  var a = 4,
+  /** An integer value that cannot be changed - explicit */
+  let b = 5,
+  /** An integer value that cannot be changed - implicit */
+  c = 6
+}
+
+

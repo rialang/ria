@@ -1,0 +1,235 @@
+program ria.lang.compiler.ria;
+
+import java.io.File;
+
+load ria.lang.compiler.eval;
+load ria.lang.compiler.showtype;
+
+var eval = undef_str;
+var exec = true;
+var compileErrorTrace = false;
+var modules = array [];
+var printType = false;
+var out = System::err;
+var doc_dir = undef_str;
+var doc_script = '';
+var nojava = false;
+
+let srcs = array [];
+let argv = array _argv;
+
+let options = array [];
+let evalOptions = array [Exec argv];
+let compileOptions = array [];
+
+let printMessage ex is ~CompileException -> () =
+    println ex::getMessage();
+
+let printWarning ex is ~CompileException -> () =
+    println ("Warning: " ^ ex::getMessage());
+
+let loseLastChar str = strLeft str ((strLength str) - 1);
+
+let repl eval = (
+    print '> ';
+    var line = readln ();
+    if defined? line then
+        strEnds? line '\' loop (
+            print '..';
+            line := (loseLastChar line) ^ "\n" ^ readln ();
+        );
+        print (eval line).str;
+        repl eval
+    else
+        println ''
+    end);
+
+let help =
+    "ria -flags... files/directories\n\n\
+    "  -h               Print this help\n\
+    "  -e expr          Evaluate expr and print result\n\
+    "  -d directory     Compile and store the generated class files\n\
+    "                   in the given directory\n\
+    "  -cp path         Give classpath\n\
+    "  -mp path         Additional search path for source modules\n\
+    "  -nojava          Don't search java files from source directories\n\
+    "  -preload modules Preload modules (: separated list)\n\
+    "  -javaver version Forces specified Java version when compiling Java\n\
+    "  -j option        Option for Javac (used when compiling Java sources)\n\
+    "  -doc directory   Generate module documentation into given directory\n\
+    "  -type            Print type signature of given expression or module\n";
+
+let splitPath = strSplit File::pathSeparator;
+
+let printException ex is ~java.lang.Throwable -> () = (
+    if ex instanceof java.lang.StackOverflowError then
+        out::println("Stack overflow")
+    elif ex instanceof java.lang.OutOfMemoryError then
+        out::println("Out of memory")
+    else
+        ex::printStackTrace(out)
+    end;
+    sysExit 2
+);
+
+let scan src local dirs to = (
+    var ok = true;
+    if src `strEnds?` '.ria' then
+        to[src] := src
+    elif src `strEnds?` '.java' then
+        if nojava then
+            ok := false
+        else
+            to[src] := src
+        end
+    else
+        dirList = listDirectory false src;
+        if empty? dirList then
+            ok := new File(src)::isDirectory()
+        else
+            dirs (SourceDir src)
+        end;
+        for dirList do {name, path}:
+            fn = if local == '' then name else "${local}/${name}" end;
+            _ = scan path fn $() to
+        done
+    end;
+    ok
+);
+
+// Main
+not (defined? eval or empty? argv) and (not exec or empty? srcs) loop (
+    arg = shift argv;
+    if arg `strStarts?` '-' then
+        case arg of
+        "-C":
+            push options (To '');
+            exec := false;
+        "-d":
+            target = shift argv;
+            push options (To target);
+            exec := false;
+        "-e":
+            eval := shift argv;
+        "-cp":
+            shift argv |> splitPath |> ClassPath |> push options;
+        "-mp": (
+            let arg = shift argv |> splitPath |> map SourceDir;
+            arg |> foreach (push compileOptions);
+            arg |> foreach (push evalOptions);
+            );
+        "-preload":
+            shift argv |> splitPath |> Preload |> push options;
+        "-type":
+            printType := true;
+            exec := false;
+            push compileOptions (Type (push modules));
+        "-doc":
+            doc_dir := shift argv;
+            exec := false;
+            push compileOptions (Type (push modules));
+        "-doc-format":
+            doc_script := shift argv;
+        "-nojava":
+            nojava := true;
+        "-javaver":
+            ver = shift argv;
+            for ['-source', ver, '-target', ver]
+                (push compileOptions . JavaOption);
+        "-j":
+            push compileOptions (JavaOption (shift argv));
+        "-compile-error-trace":
+            compileErrorTrace := true;
+        "-parse-tree":
+            push options (ParseTree ());
+        "-no-import":
+            push options (NoImport ());
+        "-v":
+            println "Ria ${riaVersion}";
+            threadExit 0;
+        _:
+            case arg of
+            "-h": ();
+            "-help": ();
+            "--help": ();
+            _:
+                println "Unexpected option: ${arg}";
+                threadExit 1;
+            end;
+            println help;
+            threadExit 0
+        end
+    else
+        push srcs arg
+    end);
+
+push options (Warn printWarning);
+
+if defined? eval then
+    if printType then
+        push evalOptions (NoExec ());
+    end;
+    {type, result} = evaluateCode options evalOptions eval;
+    case result of
+    Exception ex:
+        printException ex;
+    CompileException ex:
+        printMessage ex;
+        threadExit 1;
+    Result val: 
+        if printType then
+            println (showType [] '' type)
+        elif exec and type != Simple "()" then
+            println val
+        end
+    end
+elif empty? srcs then
+    if exec and empty? argv then
+        _ = pop options; // no Warn
+        println "Ria ${riaVersion} REPL.\n";
+        push evalOptions (Bind ());
+        repl (evaluateCode options evalOptions)
+    end
+else
+    if exec then
+        push compileOptions (Exec argv)
+    end;
+    let files = [:];
+    for (list srcs) do src:
+        if not scan src '' (push compileOptions) files then
+            println "Don't know what to do with `${src}'";
+            threadExit 1
+        end
+    done;
+    try
+        compileFiles options compileOptions (list files);
+    catch CompileException ex:
+        if compileErrorTrace then
+            ex::printStackTrace()
+        end;
+        printMessage ex;
+        threadExit 1
+    catch java.lang.reflect.InvocationTargetException ex:
+        printException ex::getCause()
+    catch java.lang.Throwable ex:
+        printException ex
+    end;
+    if not empty? modules then
+        if defined? doc_dir then
+            generateDocs {directory = doc_dir, modules, error = println}
+        else
+            for (list modules) do m:
+                if m.doc != "" then
+                    println "/*\n${m.doc}\n*/"
+                end;
+                println "module ${m.name};\n";
+                for m.typedefs do {name, type, param}:
+                    p = if not empty? param then "<${strJoin ', ' param}>" end;
+                    println "typedef ${name}${p} = \
+                            "${showType [CommentDoc ()] '' type}\n"
+                done;
+                println (showType [CommentDoc ()] '' m.type);
+            done
+        end
+    end
+end

@@ -1,0 +1,25 @@
+let filterChain list = list |> map (* 2) |> filter (> 2) |> take 4;
+println (filterChain [1..100]);
+
+let number? s is string -> maybe<number> =
+  try
+    Some (number s);
+  catch Exception e:
+    None ();
+  end;
+
+let sumArgs args =
+    args
+    |> map number?
+    |> unwrap
+    |> fold (+) 0;
+
+println (sumArgs ["1","2","3", "1", "hello", "None", "", "35"]);
+
+println (
+  "Hello" |> (^ " world")
+);
+
+println (
+  "Hello" |> ("I am saying " ^)
+);

@@ -1,0 +1,221 @@
+let asort f less l =
+   (let a = array l;
+    f less a;
+    list a);
+
+var swaps = 0;
+
+let selectionSort less a =
+   (let selectLess i j = if less a[i] a[j] then i else: j;
+    let swapMin i =
+        (swapAt a i (fold selectLess i [i + 1 .. length a - 1]);
+         swaps := swaps + 1);
+    for [0 .. length a - 2] swapMin);
+
+let combSort less a =
+   (var gap = length a;
+    var swapped = true;
+    var swaps' = 0;
+    gap > 1 or swapped loop
+       (gap := gap * 10 div 13;
+        if gap == 10 or gap == 9 then
+            gap := 11
+        elif gap < 1 then
+            gap := 1
+        end;
+        swapped := false;
+        let gap = gap; // optimisation
+        for [0 .. length a - gap - 1] do i:
+            if less a[i + gap] a[i] then
+                swapAt a i (i + gap);
+                swaps' := swaps' + 1;
+                swapped := true
+            end
+        done);
+    swaps := swaps + swaps');
+
+let shellSort less a is (^a -> ^a -> boolean) -> array<^a> -> () =
+   (var inc = length a;
+    var swaps' = 0;
+    //inc > 1 and (inc := if inc <= 7 then 1 else: inc * 10 div 23; true) loop
+    inc > 1 and (inc := if inc <= 7 then 1 else: inc * 7 shr 4 + 1; true) loop
+       (var i = inc;
+        i < length a loop
+           (tmp = a[i];
+            var j = i;
+            j >= inc and less tmp a[j - inc] loop
+               (a[j] := a[j - inc];
+                swaps' := swaps' + 1;
+                j := j - inc);
+            a[j] := tmp;
+            i := i + 1));
+    swaps := swaps + swaps' / 2e);
+
+// based on wikipedia pseudocode example
+let heapSort less a =
+   (for [1 .. length a - 1] do end_:
+        var child = end_;
+        child > 0 loop
+           (parent = (child - 1) div 2;
+            if less a[parent] a[child] then
+                swapAt a parent child;
+                swaps := swaps + 1;
+                child := parent
+            else:
+                child := 0)
+    done;
+    for (reverse [0 .. length a - 2]) do end_:
+        swapAt a 0 (end_ + 1);
+        swaps := swaps + 1;
+        var root = 0;
+        root * 2 + 1 <= end_ loop // shiftdown
+           (var child = root * 2 + 1;
+            if child < end_ and less a[child] a[child + 1] then
+                child := child + 1
+            end;
+            if less a[root] a[child] then
+                swapAt a root child;
+                swaps := swaps + 1;
+                root := child
+            else:
+                root := end_)
+    done);
+
+let qsort less a is (^a -> ^a -> boolean) -> array<^a> -> () =
+   (sort l r =
+       (var i = l;
+        var j = r;
+        var swaps' = 0;
+        x = a[(l + r) div 2];
+           (less a[i] x loop i := i + 1;
+            less x a[j] loop j := j - 1;
+            if i <= j then
+                swapAt a i j;
+                swaps' := swaps' + 1;
+                i := i + 1;
+                j := j - 1;
+            end;
+            i <= j) loop;
+        swaps := swaps + swaps';
+        if l < j then
+            sort l j
+        end;
+        if i < r then
+            sort i r
+        end)) 0 (length a - 1);
+
+let qsort2 less =
+   (qsort l =
+        case l of
+        x :+ xs: // could do with half of the compares
+            qsort (filter ((not) . less x) xs)
+                ++ x :+ qsort (filter (less x) xs);
+        _: [];
+        end);
+
+let merge less l a b =
+    if empty? a then
+        revAppend l b
+    elif empty? b then
+        revAppend l a
+    elif head a `less` head b then
+        merge less (head a :+ l) (tail a) b
+    else:
+        merge less (head b :+ l) a (tail b);
+
+let splitList l fst snd =
+    case l of
+        h1 :+ h2 :+ t: splitList t (h1 :+ fst) (h2 :+ snd);
+        h :+ _: { fst, snd = h :+ snd };
+        _: { fst, snd };
+    end;
+
+let mergeSort less l =
+    case l of
+    _:+_:+_:
+        {fst, snd} = splitList l [] [];
+        merge less [] (mergeSort less fst) (mergeSort less snd);
+    _: l
+    end;
+
+let introSort less a =
+   (len = length a;
+    half = length a div 2;
+    if len < 10 then
+        shellSort less a
+    else
+        a1 = slice a 0 half;
+        a2 = slice a half len;
+        introSort less a1;
+        introSort less a2;
+        var i = 0;
+        var j = 0;
+        half2 = length a2;
+        swaps := swaps + len / 2e;
+        for [0 .. len - 1] do k:
+            if j >= half2 or (i < half and less a1[i] a2[j]) then
+                a[k] := a1[i];
+                i := i + 1;
+            else
+                a[k] := a2[j];
+                j := j + 1;
+            end
+        done
+    end);
+
+let insertionSort less l =
+    fold do l e:
+        {fst, snd} = splitBy ((not) . (`less` e)) l;
+        fst ++ e :+ snd
+    done [] l;
+
+let insertionSort2 less a =
+    for [1 .. length a - 1] do i:
+        v = a[i];
+        var j = i - 1;
+        j >= 0 and less v a[j] loop
+           (a[j + 1] := a[j];
+            j := j - 1);
+        swaps := swaps + (i - j) / 2e;
+        a[j + 1] := v
+    done;
+
+
+let test n slow =
+   (let l = map $(randomInt (n * 2)) [1..n];
+    let sorted = sort l;
+
+    let testSort name f =
+       (var n = 0; // number of comparisions
+        let less x y = (n := n + 1; x < y);
+        swaps := 0;
+        let t' = System::currentTimeMillis();
+        let r = f less l;
+        _ = length r; // force lists so n would have correct value
+        let t = System::currentTimeMillis() - t';
+        if sorted != r then
+            println "${name}: ERROR\n${r} != ${sorted}"
+        else
+            swapStr = if swaps >= 1 then "\t${int swaps}sw" end;
+            println "${name}:${n}\t${t}ms${swapStr}"
+        end);
+    testASort name f = testSort name (asort f);
+
+    println "sorting array of ${length l} elements...";
+    if slow then
+        testASort "selection" selectionSort;
+        testSort "insertion" insertionSort;
+        testASort "insertion2" insertionSort2;
+        testSort "qsort2" qsort2;
+        testASort "heap" heapSort;
+    end;
+    testASort "comb" combSort;
+    testASort "shell" shellSort;
+    testASort "qsort" qsort;
+    testASort "intro" introSort;
+    testSort "merge" mergeSort;
+    testSort "sortBy" sortBy);
+
+test (randomInt 200 + 2000) true;
+test (randomInt 10000 + 100000) false;
+
