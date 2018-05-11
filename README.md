@@ -74,6 +74,67 @@ If you wish to change this, you can do so by adding a configuration section to t
     </configuration>
 ```
 
+If you want to build an executable jar, you will need to use the Maven assembly plugin or the shade plugin.
+Assuming that your main program is called `main` you can use the following in your `pom.xml` for the assembly plugin.
+
+```xml
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <archive>
+                        <manifest>
+                            <mainClass>main</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+```
+
+Similarly for the Shade plugin, you can use the following:
+
+```xml
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>main-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Main-Class>main</Main-Class>
+                                    </manifestEntries>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+```
+
+Either of the two plugins above will build a 'fat' jar containing all the dependencies that you need to run your
+Ria programs.
+
 Source for the Maven plugin is available at [https://github.com/rialang/ria-maven-plugin/](https://github.com/rialang/ria-maven-plugin/)
 
 ## Using Gradle
@@ -88,7 +149,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.github.rialang:ria-gradle-plugin:1.0'
+        classpath 'com.github.rialang:ria-gradle-plugin:0.7.0'
     }
 }
 
@@ -106,6 +167,58 @@ riaCompile {
             "src/main/java"]
 }
 
+```
+
+For building a 'fat' jar, you can use the following in your `build.gradle`.
+
+Basically, you will need to add the line below to your buildscript repositories section
+```groovy
+        jcenter()
+```
+
+and the following to your dependencies in the buildscript
+
+```groovy
+        classpath 'com.github.jengelman.gradle.plugins:shadow:2.0.3'
+```
+
+Finally, applying the shadow plugin as below.
+
+```groovy
+// Shadow plugin
+apply plugin: 'com.github.johnrengelman.shadow'
+```
+
+The full script is below.
+
+```groovy
+buildscript {
+    repositories {
+        mavenCentral()
+        jcenter()
+    }
+    dependencies {
+        classpath 'com.github.rialang:ria-gradle-plugin:0.7.0'
+        classpath 'com.github.jengelman.gradle.plugins:shadow:2.0.3'
+    }
+}
+
+// Shadow plugin
+apply plugin: 'com.github.johnrengelman.shadow'
+
+//...
+
+apply plugin: 'ria-gradle-plugin'
+
+dependencies {
+    compile 'com.github.rialang:ria:0.7.0'
+}
+
+riaCompile {
+    sourceDirs = [
+            "src/main/ria",
+            "src/main/java"]
+}
 ```
 
 Source for the Gradle plugin is available at [https://github.com/rialang/ria-gradle-plugin/](https://github.com/rialang/ria-gradle-plugin/)
