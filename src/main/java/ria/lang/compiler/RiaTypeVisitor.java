@@ -18,7 +18,7 @@ public class RiaTypeVisitor extends ClassVisitor {
     private boolean deprecated;
 
     RiaTypeVisitor() {
-        super(Opcodes.ASM5);
+        super(Opcodes.ASM9);
     }
 
     static ModuleType readType(Compiler compiler, InputStream in)

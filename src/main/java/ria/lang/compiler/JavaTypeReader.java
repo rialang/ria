@@ -26,7 +26,7 @@ public class JavaTypeReader extends ClassVisitor implements Opcodes {
     public int access;
 
     public JavaTypeReader() {
-        super(ASM6);
+        super(ASM9);
     }
 
     private static int parseSig(Map<String, CType> vars, List<CType> res, int p, char[] s) {
