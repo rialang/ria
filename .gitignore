@@ -1,5 +1,7 @@
 /.idea/
+/.vscode/
 /target/
 /docs/modules
 *.iml
 .DS_Store
+dependency-reduced-pom.xml
